@@ -63,6 +63,8 @@ import {
   showAddMac,
   startFleetUpdate,
   wireDaemonUpdate,
+  ccCardRowHtml,
+  wireCcUpdate,
   type Server,
 } from "./fleet";
 import type { AccountInfo, AuthAccountsEvent, AuthStatusEvent, Environment, PipelineAdversaryStat, ServerEvent, Session, TodoistProjectInfo } from "../../protocol";
@@ -979,6 +981,7 @@ function serverCardHtml(srv: Server): string {
     ${accountSyncLine(srv, isHub)}
     <div class="git-row" style="margin-top:10px"><button class="mini" id="daemon-update-${id}">${icon("refresh")} Update Anvil</button></div>
     <pre class="git-output" id="daemon-update-output-${id}" hidden></pre>
+    ${ccCardRowHtml(srv)}
   </div>`;
 }
 export function renderServerCards(): void {
@@ -1009,6 +1012,7 @@ export function renderServerCards(): void {
     list.map(serverCardHtml).join("");
   for (const srv of list) {
     wireDaemonUpdate(srv); // each card's "Update Anvil" targets that server's own daemon
+    wireCcUpdate(srv); // the managed Claude Code row (no-op when the card has no cc row)
     if (srv.url !== HUB_URL) {
       document.getElementById(`srv-remove-${cssId(srv.url)}`)?.addEventListener("click", () => void confirmRemoveServer(srv));
     }
