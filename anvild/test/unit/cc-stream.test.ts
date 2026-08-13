@@ -2,7 +2,7 @@
 // known types pass through, unknown types are preserved as {type:"unknown"}, garbage
 // becomes a warn, and blank lines are ignored. Pinned offline; golden replay is Task 7.
 import { expect, test } from "bun:test";
-import { parseCCLine, MAX_LINE_BYTES } from "../../src/cc/stream";
+import { parseCCLine, MAX_LINE_BYTES, NdjsonSplitter } from "../../src/cc/stream";
 
 test("known message types pass through typed", () => {
   const { msg, warn } = parseCCLine('{"type":"system","subtype":"init","session_id":"abc"}');
@@ -31,6 +31,20 @@ test("non-object and missing-type lines yield warn", () => {
 
 test("blank line is ignored (no msg, no warn)", () => {
   expect(parseCCLine("  \n")).toEqual({});
+});
+
+test("splitter reassembles lines across chunk boundaries", () => {
+  const s = new NdjsonSplitter();
+  expect(s.push('{"type":"sys')).toEqual([]);
+  expect(s.push('tem","subtype":"init"}\n{"type":"result"}\n{"ty')).toEqual([
+    '{"type":"system","subtype":"init"}',
+    '{"type":"result"}',
+  ]);
+  expect(s.flush()).toBe('{"ty');
+});
+
+test("splitter flush on empty buffer returns undefined", () => {
+  expect(new NdjsonSplitter().flush()).toBeUndefined();
 });
 
 test("oversized line is skipped with warn", () => {

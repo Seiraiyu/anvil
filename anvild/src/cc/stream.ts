@@ -84,3 +84,23 @@ export function parseCCLine(line: string): ParsedLine {
   if (!KNOWN.has(rec.type)) return { msg: { type: "unknown", ccType: rec.type, raw: rec } };
   return { msg: rec as unknown as CCMessage };
 }
+
+/** Incremental NDJSON line assembly over arbitrary stdout chunk boundaries. */
+export class NdjsonSplitter {
+  private buf = "";
+
+  /** Feed a chunk; returns the complete lines it closed (without trailing newline). */
+  push(chunk: string): string[] {
+    this.buf += chunk;
+    const lines = this.buf.split("\n");
+    this.buf = lines.pop() ?? "";
+    return lines.filter((l) => l.length > 0);
+  }
+
+  /** The unterminated tail at EOF (a crashed CLI can die mid-line), or undefined. */
+  flush(): string | undefined {
+    const tail = this.buf;
+    this.buf = "";
+    return tail.length > 0 ? tail : undefined;
+  }
+}
