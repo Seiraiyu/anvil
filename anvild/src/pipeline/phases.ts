@@ -9,7 +9,7 @@
  */
 import { extractJson } from "../integrations/json";
 import { assertIndependent, roster as buildRoster, type ModelSpec, type PipelinePhase } from "../agent/model-roster";
-import type { AgentQueryResult } from "../agent/query";
+import type { AgentQueryResult } from "../cc/oneshot";
 import type { PhaseContext, PhaseRun } from "./orchestrator";
 import { recordAssignment, type AcceptanceCriterion, type PassFail } from "./trace";
 import type { GateOutcome, RiskTier } from "./types";
