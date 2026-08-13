@@ -47,7 +47,8 @@ export interface TeamCoordinatorDeps {
   registry: ConnectionRegistry;
   persist: () => void;
   broadcastUpdated: (data: SessionData) => void;
-  /** Queue a prompt on a session's InputQueue (starts a turn if idle) — the relay + conflict path. */
+  /** Queue a prompt on a session's TurnRunner (FIFO in the daemon; starts a turn if idle) — the
+   *  relay + conflict path. */
   prompt: (sessionId: string, text: string) => void;
   /** Full session teardown (worktree + branch + state) — the dismiss path. */
   kill: (id: string) => Promise<void>;
@@ -134,7 +135,7 @@ export class TeamCoordinator {
     const member = this.deps.getSession(memberId);
     if (!member || member.data.parentId !== leadId) throw new BadCommand(`not a member of this team: ${memberId}`);
     this.chargeRelay(leadId);
-    this.deps.prompt(memberId, text); // queues via the member's InputQueue; starts a turn if idle
+    this.deps.prompt(memberId, text); // queues FIFO in the member's TurnRunner; starts a turn if idle
     return `Sent to member "${member.data.title}" (${memberId}); it will act on your message next turn.`;
   }
 
