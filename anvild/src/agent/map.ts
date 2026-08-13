@@ -1,4 +1,4 @@
-import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { CCMessage } from "../cc/stream";
 import type { ContentBlock, Usage } from "@protocol";
 import type { SessionEventBody } from "../session/session";
 import type { MarkdownRenderer } from "../render/markdown";
@@ -6,20 +6,40 @@ import type { MarkdownRenderer } from "../render/markdown";
 /** Handled via the question card (canUseTool), not the normal tool_use/tool.result path. */
 const ASK_USER_QUESTION = "AskUserQuestion";
 
+/** Assistant content-block types we deliberately render as NOTHING (thinking stays private;
+ *  deltas already streamed). Anything else unrecognized becomes a fallback card — never dropped. */
+const IGNORED_BLOCK_TYPES = new Set(["thinking", "redacted_thinking"]);
+
+/** Max pretty-printed bytes a fallback card carries (design §4.7 delta 3 — size-capped). */
+export const FALLBACK_JSON_CAP = 16 * 1024;
+
+function fallbackBlock(ccType: string, raw: unknown): Extract<ContentBlock, { kind: "fallback" }> {
+  let json: string;
+  try {
+    json = JSON.stringify(raw, null, 1) ?? String(raw);
+  } catch {
+    json = String(raw);
+  }
+  if (json.length > FALLBACK_JSON_CAP) json = `${json.slice(0, FALLBACK_JSON_CAP)}\n… [truncated]`;
+  return { kind: "fallback", ccType, json };
+}
+
 /** The ids of any AskUserQuestion tool_use blocks in this message — so the driver can drop the
- *  matching tool.result (the answers echo), keeping all SDK-shape knowledge in this module. */
-export function askUserQuestionToolIds(m: SDKMessage): string[] {
+ *  matching tool.result (the answers echo), keeping all CC-shape knowledge in this module. */
+export function askUserQuestionToolIds(m: CCMessage): string[] {
   if (m.type !== "assistant") return [];
   const content: any[] = (m as any).message?.content ?? [];
   return content.filter((b) => b?.type === "tool_use" && b.name === ASK_USER_QUESTION).map((b) => b.id as string);
 }
 
 /**
- * Pure translator: one `SDKMessage` → the session-scoped events to emit (arch §6.2).
- * This is the SDK-drift containment point — keep all SDK-shape knowledge here and
- * fixture-test it offline (test/unit/map.test.ts).
+ * Pure translator: one `CCMessage` → the session-scoped events to emit (arch §6.2).
+ * This is the CLI-drift containment point — keep all stream-json-shape knowledge here and
+ * fixture-test it offline (test/unit/map.test.ts; shapes pinned by the golden recordings).
+ * The SDK path (driver.ts, until Plan 8) passes structurally-identical SDKMessages through
+ * a cast — the wire shapes are the same stream-json.
  */
-export function mapMessage(m: SDKMessage, renderer: MarkdownRenderer): SessionEventBody[] {
+export function mapMessage(m: CCMessage, renderer: MarkdownRenderer): SessionEventBody[] {
   switch (m.type) {
     case "stream_event": {
       const ev = (m as any).event;
@@ -43,6 +63,9 @@ export function mapMessage(m: SDKMessage, renderer: MarkdownRenderer): SessionEv
           if (b.name === ASK_USER_QUESTION) continue;
           blocks.push({ kind: "tool_use", toolUseId: b.id, name: b.name, input: b.input });
           toolUses.push({ type: "tool.use", toolUseId: b.id, name: b.name, input: b.input });
+        } else if (b && typeof b.type === "string" && !IGNORED_BLOCK_TYPES.has(b.type)) {
+          // A content-block type this daemon doesn't know — surface it, never drop it (§4.7 delta 3).
+          blocks.push(fallbackBlock(b.type, b));
         }
       }
       // Skip an assistant.message that held only an AskUserQuestion (now empty) so the client
@@ -73,18 +96,23 @@ export function mapMessage(m: SDKMessage, renderer: MarkdownRenderer): SessionEv
       return [{ type: "result", stopReason: r.stop_reason ?? r.subtype ?? "end_turn", usage: resultUsage(r) }];
     }
 
+    // An unknown TOP-LEVEL stream-json type, preserved by the parser (cc/stream.ts) — surface
+    // it as a fallback card riding a normal assistant.message (§4.7 delta 3).
+    case "unknown":
+      return [{ type: "assistant.message", blocks: [fallbackBlock(m.ccType, m.raw)] }];
+
     default:
       return [];
   }
 }
 
-/** The SDK session id (used as `claudeSessionId` for resume). */
-export function extractSessionId(m: SDKMessage): string | undefined {
+/** The CC session id (used as `claudeSessionId` for resume). */
+export function extractSessionId(m: CCMessage): string | undefined {
   const sid = (m as any).session_id;
   return typeof sid === "string" && sid.length > 0 ? sid : undefined;
 }
 
-export function extractResultUsage(m: SDKMessage): Usage | undefined {
+export function extractResultUsage(m: CCMessage): Usage | undefined {
   if (m.type !== "result") return undefined;
   return resultUsage(m as any);
 }

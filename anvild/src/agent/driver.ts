@@ -1,4 +1,5 @@
 import { query, type McpSdkServerConfigWithInstance, type Query } from "@anthropic-ai/claude-agent-sdk";
+import type { CCMessage } from "../cc/stream";
 import { claudeCliOptions } from "./cli";
 import { buildCommandInfo, type LocalPlugin } from "./skills";
 import { sdkModelId } from "./models";
@@ -264,7 +265,10 @@ export class AgentDriver {
     if (!this.q) return;
     try {
       for await (const m of this.q) {
-        const sid = extractSessionId(m);
+        // The SDK's SDKMessage and the CLI's stream-json CCMessage are the same wire shapes;
+        // map.ts is typed against CCMessage (the golden-pinned vendored types) since Plan 3.
+        const cm = m as unknown as CCMessage;
+        const sid = extractSessionId(cm);
         if (sid) this.session.data.claudeSessionId = sid;
 
         // The SDK's session-init message reports the resolved slash-commands/skills (built-in + the
@@ -295,7 +299,7 @@ export class AgentDriver {
           });
         }
 
-        for (const id of askUserQuestionToolIds(m)) this.askQuestionIds.add(id);
+        for (const id of askUserQuestionToolIds(cm)) this.askQuestionIds.add(id);
         // Tool results are the evidence the goal judge needs (design D2) — a claim of success that
         // the tool result contradicts must be visible to it.
         if (m.type === "user") {
@@ -317,7 +321,7 @@ export class AgentDriver {
           if (text) this.session.lastAssistantText = text;
           if (text) this.session.recordTurnLine(`assistant: ${text}`, GOAL_TRANSCRIPT_LINES);
         }
-        const bodies = mapMessage(m, this.renderer);
+        const bodies = mapMessage(cm, this.renderer);
         let sawToolUse = false;
         let sawToolResult = false;
         for (const body of bodies) {
@@ -342,7 +346,7 @@ export class AgentDriver {
         if (sawToolResult) this.session.setStatus("thinking");
 
         if (m.type === "result") {
-          const usage = extractResultUsage(m);
+          const usage = extractResultUsage(cm);
           if (usage) {
             this.session.data.usage.inputTokens += usage.inputTokens;
             this.session.data.usage.outputTokens += usage.outputTokens;
