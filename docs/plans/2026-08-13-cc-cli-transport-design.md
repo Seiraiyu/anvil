@@ -112,7 +112,7 @@ Upstream's in-process `createSdkMcpServer` tools (`default-tools.ts`, `team-tool
 
 `cc/oneshot.ts` replaces `runAgentQuery`: spawn `-p` (no resume), `--permission-mode plan` for `readonly`, env from `buildAgentEnv` unchanged — the OpenRouter/GLM "Anthropic skin" profiles pass through as env vars to the child exactly as the SDK passed them, so dual-model pipeline parity is env-only. `ExitPlanMode` plan capture reads the same tool_use block from stream-json.
 
-**Deliberate exception to "fully CC-native":** `pipeline-guard.ts` ([SEC-H4]) is retained for unattended pipeline runs — converted to a CC PreToolUse hook in the pipeline's settings overlay. Rationale: it gates a *third-party model* (GLM) running with write tools and no human present; that is a security control on unattended automation, not part of the interactive-session config-authority decision. Interactive sessions get no daemon gate. *(Flagged for explicit review sign-off.)*
+**Deliberate exception to "fully CC-native":** `pipeline-guard.ts` ([SEC-H4]) is retained for unattended pipeline runs — converted to a CC PreToolUse hook in the pipeline's settings overlay. Rationale: it gates a *third-party model* (GLM) running with write tools and no human present; that is a security control on unattended automation, not part of the interactive-session config-authority decision. Interactive sessions get no daemon gate. *(Signed off 2026-08-13: daemon-injected hooks are acceptable wherever needed, provided they are real CC hooks — settings-overlay hook commands — never SDK callbacks.)*
 
 ### 4.7 Protocol deltas (exhaustive)
 
