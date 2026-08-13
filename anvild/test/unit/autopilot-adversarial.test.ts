@@ -1,29 +1,18 @@
-import { test, expect, mock } from "bun:test";
+import { test, expect } from "bun:test";
+import { join } from "node:path";
 import type { OpenRouterClient } from "../../src/integrations/openrouter";
+import { planUnit } from "../../src/integrations/autopilot";
 
-// Mock the Agent SDK so planUnit() gets a canned plan without spawning a subprocess. runQuery reads
-// the plan from an ExitPlanMode tool_use block and the wrap-up from the result message.
+// planUnit rides the CLI-direct one-shot (cc/oneshot.ts) — no SDK mock, no global mock.module
+// hazard: the spawn is pointed at the REAL fake-cc child, whose fixture replays an ExitPlanMode
+// tool_use (the plan) and a result wrap-up, exactly like the recordings.
+const FAKE_CC = join(import.meta.dir, "..", "helpers", "fake-cc.ts");
+const PLAN_FIXTURE = join(import.meta.dir, "..", "fixtures", "cc", "oneshot-plan.ndjson");
 const CANNED_PLAN = "# Plan\n\nChange src/x.ts to do the thing.";
-// mock.module replaces the SDK module globally for the whole run, so provide every export the rest of
-// the codebase pulls from it (createSdkMcpServer/tool are used by the default-tools MCP server) — a
-// query-only stub would break unrelated test files that import the supervisor.
-mock.module("@anthropic-ai/claude-agent-sdk", () => ({
-  query: () => ({
-    async *[Symbol.asyncIterator]() {
-      yield {
-        type: "assistant",
-        message: {
-          content: [{ type: "tool_use", name: "ExitPlanMode", input: { plan: CANNED_PLAN } }],
-        },
-      } as any;
-      yield { type: "result", result: "The plan is ready." } as any;
-    },
-  }),
-  createSdkMcpServer: () => ({ type: "sdk", name: "mock", instance: {} }),
-  tool: (name: string, _desc: unknown, _schema: unknown, handler: unknown) => ({ name, handler }),
-}));
+const CC = { ccCommand: ["bun", FAKE_CC], extraEnv: { FAKE_CC_FIXTURE: PLAN_FIXTURE } };
 
-const { planUnit } = await import("../../src/integrations/autopilot");
+// A `claude`-profile spawn requires a subscription token (agent/env.ts); fake placeholder.
+process.env.CLAUDE_CODE_OAUTH_TOKEN ||= "sk-ant-oat-test-placeholder";
 
 const UNIT = { title: "Do the thing", rationale: "grouped", taskIds: ["t1"] };
 const TASKS = [{ id: "t1", project_id: "p1", content: "the task" } as any];
@@ -38,7 +27,7 @@ function fakeClient(reply: string): OpenRouterClient {
 }
 
 test("planUnit is inert without the adversarial panel: no review, plan unchanged", async () => {
-  const planned = await planUnit(UNIT, TASKS, { repoRoot: "/tmp" });
+  const planned = await planUnit(UNIT, TASKS, { repoRoot: "/tmp", cc: CC });
   expect(planned.adversarial).toBeUndefined();
   expect(planned.plan).toBe(CANNED_PLAN);
   expect(planned.plan).not.toContain("## Adversarial Review");
@@ -49,6 +38,7 @@ test("planUnit runs the panel when enabled: review persisted + appended to the p
   const planned = await planUnit(UNIT, TASKS, {
     repoRoot: "/tmp",
     adversarial: { enabled: true, client, models: ["m1", "m2"] },
+    cc: CC,
   });
   expect(planned.adversarial?.critiques).toHaveLength(2);
   expect(planned.plan).toContain("## Adversarial Review");

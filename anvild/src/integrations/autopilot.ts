@@ -1,9 +1,7 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { AutopilotEffort, Model } from "@protocol";
-import { buildAgentEnv } from "../agent/env";
+import { sdkModelId } from "../agent/models";
 import type { AccountStore } from "../auth/accounts";
-import { makePipelineGuardHook } from "../agent/pipeline-guard";
-import type { QueryLike } from "../agent/query";
+import { runCcQuery } from "../cc/oneshot";
 import type { TodoistClient, TodoistTask, TodoistSection, TodoistComment } from "./todoist";
 import { readStatus, withStatus, type AnvilStatus } from "./status";
 import { extractPlanMeta, PLAN_META_INSTRUCTION, type PlanClarification } from "./plan-meta";
@@ -56,67 +54,37 @@ export const VALIDATION_INSTRUCTION = `Include a dedicated "## Validation" secti
 - When neither fits, give a precise manual repro: the commands to run and the exact expected output/state.
 State the expected passing outcome for each check so success is unambiguous. Ground every command in tooling that actually exists in this repo (inspect package.json / scripts / existing tests first).`;
 
+/** Test seam threaded to runCcQuery: point the spawn at fake-cc + configure it (never set in prod). */
+export interface CcTestSeam {
+  ccCommand?: string[];
+  extraEnv?: Record<string, string>;
+}
+
 /**
- * Run a one-shot SDK query. `readonly` uses plan mode (no writes), where the model delivers its plan
- * via an `ExitPlanMode` tool call rather than the final message — its `result` text is only a
- * conversational wrap-up ("the plan is ready at …"). We therefore capture BOTH: `plan` is the
- * `ExitPlanMode` input (the actual markdown plan, when present) and `text` is the closing message.
- * Planning callers want `plan`; the JSON-emitting bundler wants `text`.
+ * Run a one-shot CLI-direct query (cc/oneshot.ts). `readonly` uses plan mode (no writes), where the
+ * model delivers its plan via an `ExitPlanMode` tool call rather than the final message — its
+ * `result` text is only a conversational wrap-up ("the plan is ready at …"). runCcQuery captures
+ * BOTH: `plan` is the `ExitPlanMode` input (the actual markdown plan, when present) and `text` is
+ * the closing message. Planning callers want `plan`; the JSON-emitting bundler wants `text`.
+ *
+ * Autopilot planning is Claude-only (the dual-model pipeline flips profiles elsewhere), so the
+ * protocol `Model` alias maps onto an ad-hoc claude-profile spec. The roster billing account rides
+ * through to buildAgentEnv inside runCcQuery (multi-account §6).
  */
 async function runQuery(
   prompt: string,
-  opts: { model: Model; cwd?: string; readonly?: boolean; signal?: AbortSignal; queryFn?: QueryLike; accounts?: AccountStore; accountId?: string },
+  opts: { model: Model; cwd?: string; readonly?: boolean; signal?: AbortSignal; accounts?: AccountStore; accountId?: string; cc?: CcTestSeam },
 ): Promise<{ text: string; plan?: string }> {
-  // Bridge the run-level signal to the SDK's AbortController so a cancelled/timed-out run tears down the
-  // planning subprocess instead of leaving it spinning (and the run — and its spinner — pinned open).
-  const ac = new AbortController();
-  if (opts.signal) {
-    if (opts.signal.aborted) ac.abort();
-    else opts.signal.addEventListener("abort", () => ac.abort(), { once: true });
-  }
-  // Default to the real SDK query; tests inject a fake so no subprocess spawns (mirrors agent/query.ts).
-  const run = opts.queryFn ?? (query as unknown as QueryLike);
-  const q = run({
-    prompt,
-    options: {
-      model: opts.model,
-      ...(opts.cwd ? { cwd: opts.cwd } : {}),
-      // plan mode = reads/greps allowed, edits/writes blocked → safe headless inspection.
-      permissionMode: opts.readonly ? "plan" : "default",
-      settingSources: [], // the daemon is the authority; don't load ambient Claude Code config
-      // A headless run has no human to answer a permission "ask", and in plan mode the model
-      // delivers its plan through an `ExitPlanMode` tool call — an approval-gated op. With no
-      // PreToolUse hook (and no canUseTool), that ask has no responder and the query never reaches
-      // a terminal result: the `for await` below blocks forever. Give every tool an allow/deny
-      // decision — the same SEC-H4 danger backstop the
-      // dev pipeline uses (agent/query.ts) — so ExitPlanMode is allowed and the run completes.
-      hooks: {
-        PreToolUse: [{ hooks: [makePipelineGuardHook(opts.cwd)], timeout: 3600 }],
-      },
-      executable: "bun",
-      abortController: ac,
-      // Built per-call (not cached at module load) so a token set/reset via the UI (auth.set) takes
-      // effect for the next planning/refine run without restarting the daemon. See AuthStore. When the
-      // caller passes a roster, the run bills to the environment's chosen account (multi-account §6).
-      env: buildAgentEnv({ accounts: opts.accounts, accountId: opts.accountId }),
-    },
+  return runCcQuery(prompt, {
+    model: { id: "claude", profile: "claude", sdkModel: sdkModelId(opts.model), label: opts.model },
+    cwd: opts.cwd,
+    readonly: opts.readonly,
+    signal: opts.signal,
+    accounts: opts.accounts,
+    accountId: opts.accountId,
+    ccCommand: opts.cc?.ccCommand,
+    extraEnv: opts.cc?.extraEnv,
   });
-  let text = "";
-  let plan: string | undefined;
-  for await (const raw of q) {
-    const msg = raw as { type?: string; message?: { content?: unknown[] }; result?: unknown };
-    if (msg.type === "assistant" && Array.isArray(msg.message?.content)) {
-      // The plan rides in the ExitPlanMode tool call's `input.plan`, not the final result text.
-      for (const block of msg.message.content as { type?: string; name?: string; input?: { plan?: unknown } }[]) {
-        if (block.type === "tool_use" && block.name === "ExitPlanMode") {
-          const p = block.input?.plan;
-          if (typeof p === "string" && p.trim()) plan = p.trim();
-        }
-      }
-    }
-    if (msg.type === "result" && typeof msg.result === "string") text = msg.result;
-  }
-  return { text: text.trim(), ...(plan ? { plan } : {}) };
 }
 
 /**
@@ -200,7 +168,7 @@ async function fetchComments(
 export async function bundleTasks(
   tasks: TodoistTask[],
   sections: TodoistSection[],
-  opts: { model?: Model; repoName?: string; signal?: AbortSignal; accounts?: AccountStore; accountId?: string } = {},
+  opts: { model?: Model; repoName?: string; signal?: AbortSignal; accounts?: AccountStore; accountId?: string; cc?: CcTestSeam } = {},
 ): Promise<ProposedUnit[]> {
   if (tasks.length === 0) return [];
   const sectionName = (id?: string | null) => sections.find((s) => s.id === id)?.name;
@@ -218,7 +186,7 @@ ${list}
 Respond with ONLY a JSON array, no prose:
 [{"title": "...", "rationale": "...", "taskIds": ["id1","id2"]}]`;
 
-  const out = await runQuery(prompt, { model: opts.model ?? "sonnet", signal: opts.signal, accounts: opts.accounts, accountId: opts.accountId });
+  const out = await runQuery(prompt, { model: opts.model ?? "sonnet", signal: opts.signal, accounts: opts.accounts, accountId: opts.accountId, cc: opts.cc });
   const units = extractJson<ProposedUnit[]>(out.text);
   // Defensive: keep only real candidate ids, drop empty units.
   const valid = new Set(tasks.map((t) => t.id));
@@ -243,6 +211,7 @@ export async function planUnit(
     /** Bill this run to a specific Claude account (the environment's, multi-account §6). */
     accounts?: AccountStore;
     accountId?: string;
+    cc?: CcTestSeam;
   },
 ): Promise<PlannedUnit> {
   const members = tasks.filter((t) => unit.taskIds.includes(t.id));
@@ -268,6 +237,7 @@ ${PLAN_META_INSTRUCTION}`;
     signal: opts.signal,
     accounts: opts.accounts,
     accountId: opts.accountId,
+    cc: opts.cc,
   });
   const resolved = resolvePlan(out);
   const { summary, effort, clarification } = resolved;
@@ -305,7 +275,7 @@ ${PLAN_META_INSTRUCTION}`;
 export async function classifyIntake(
   unit: ProposedUnit,
   tasks: TodoistTask[],
-  opts: { model?: Model; signal?: AbortSignal; comments?: Map<string, TodoistComment[]>; accounts?: AccountStore; accountId?: string } = {},
+  opts: { model?: Model; signal?: AbortSignal; comments?: Map<string, TodoistComment[]>; accounts?: AccountStore; accountId?: string; cc?: CcTestSeam } = {},
 ): Promise<IntakeVerdict> {
   const taskBlock = tasks.map((t) => taskLine(t, { comments: opts.comments?.get(t.id) })).join("\n");
   const prompt = `You are the User Advocate at intake for an autonomous engineering autopilot. If you approve this, it will be implemented UNATTENDED — no human in the loop — and shipped as a pull request. Judge ONLY whether the request is specified well enough to build without inventing material product decisions. Do not plan or solve it.
@@ -325,7 +295,7 @@ Why bundled: ${unit.rationale}
 Tasks:
 ${taskBlock}`;
   try {
-    const out = await runQuery(prompt, { model: opts.model ?? "sonnet", signal: opts.signal, accounts: opts.accounts, accountId: opts.accountId });
+    const out = await runQuery(prompt, { model: opts.model ?? "sonnet", signal: opts.signal, accounts: opts.accounts, accountId: opts.accountId, cc: opts.cc });
     return parseIntakeVerdict(extractJson<unknown>(out.text));
   } catch {
     // Never let a classifier hiccup (parse failure, transient SDK error) block planning — fail open.
