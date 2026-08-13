@@ -27,7 +27,7 @@ Key facts that shape the design:
 
 - **In scope (files/modules/systems):**
   - `anvild/src/agent/**` — the entire SDK seam: `driver.ts`, `map.ts`, `query.ts`, `cli.ts`, `permissions.ts`, `questions.ts`, `input-queue.ts`, `danger-list.ts`, `pipeline-guard.ts`, `default-tools.ts`, `team-tools.ts`, `member-tools.ts`, `planning-tools.ts`, `goal.ts`, `skills.ts`, `env.ts`, `models.ts`, `model-roster.ts`, `model-catalog.ts`
-  - `anvild/src/integrations/autopilot.ts`, `anvild/src/pipeline/**` (SDK `query()` call sites)
+  - `anvild/src/integrations/autopilot.ts`, `anvild/src/pipeline/**`, `anvild/src/agent/icon.ts` (SDK `query()` call sites — six total incl. `pickIcon`)
   - `anvild/src/auth/guard.ts`, `auth/degrade.ts` (API-key rejection — deleted per interview)
   - `anvild/src/session/**`, `anvild/src/server/**` (status mapping, protocol deltas)
   - New: `anvild/src/cc/**` (CC install manager, turn runner, transcript reconciler, permission MCP server)
@@ -75,8 +75,8 @@ The daemon writes exactly one `user` message (text + attachment content blocks) 
 
 | File | Responsibility | Mirrors |
 |---|---|---|
-| `cc/install.ts` | Versioned installs under `~/.anvil/cc/<version>/`, `current` symlink, download via official installer, rollback (flip symlink to previous), version inventory | daemon self-updater store |
-| `cc/update.ts` | Update orchestration: check latest, download, **smoke test**, flip, changelog fetch, rollback command | `stable-update-service` flow |
+| `cc/install.ts` | Versioned installs under `~/.anvil/cc/versions/<v>/`, `current`/`previous` symlinks with atomic flip, injectable downloader, version inventory | net-new store (daemon self-updater is git-in-place); atomic-flip precedent is `web/build.ts` `dist.next`→rename |
+| `cc/update.ts` | Update orchestration: check latest, download, **smoke test**, flip, rollback; single-writer state file + in-flight guard | `stable-update-service` transferables: `CommandRunner` injection, phase machine, frozen-contract test |
 | `cc/smoke.ts` | Post-install gate: spawn candidate binary in a temp dir, one trivial turn, assert `system/init` + `result` parse, permission-tool round-trip | new |
 | `cc/turn-runner.ts` | Spawn/supervise one turn's process; stdin write; stdout NDJSON parse → `mapMessage`; exit/signal handling; per-session turn queue (replaces `InputQueue` semantics) | `driver.ts` (replaces) |
 | `cc/stream.ts` | Raw stream-json line parser + local `CCMessage` types (vendored shapes; no SDK import) | `map.ts` input types |
@@ -119,7 +119,7 @@ Upstream's in-process `createSdkMcpServer` tools (`default-tools.ts`, `team-tool
 1. **`autonomy` → `permissionMode`**: values `default | acceptEdits | plan | bypassPermissions`. Client picker relabeled. (Breaking; fresh start makes this free.)
 2. **`TurnUsage`/rate-limit gauge**: sourced from the `result` message's usage/`rate_limits`/context fields — same data, new extraction; wire shape unchanged.
 3. **New event `fallback.card`**: `{ccType: string, json: string (pretty-printed, size-capped)}` rendered by clients as a collapsed generic card. Additive.
-4. **New REST/WS surface for the CC updater**: `cc.version` (current/previous/latest/changelog), `cc.update`, `cc.rollback`, progress events. Additive, mirrors daemon-update surface.
+4. **New REST surface for the CC updater**: `/api/cc/v1/{status,check,apply,rollback}` + a `cc-update` capability flag. Additive; REST (not WS) and client status-polling (not push) deliberately mirror the daemon-update precedent — a version-skewed daemon rejects versioned WS frames including the update that would repair the skew (`protocol.ts:57-59`), and no progress-push mechanism exists in the update subsystem today.
 5. **`session.status` unchanged** (`idle | thinking | running_tool | awaiting_permission | awaiting_question | error | exited`) — now derived in `turn-runner` from stream events + process lifecycle. `exited` gains meaning "turn process gone + not resumable".
 
 ### 4.8 CC install & update flow

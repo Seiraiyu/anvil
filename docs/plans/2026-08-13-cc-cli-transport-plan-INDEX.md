@@ -1,0 +1,23 @@
+# CC CLI Transport — Implementation Plan Index
+
+Design: [`2026-08-13-cc-cli-transport-design.md`](2026-08-13-cc-cli-transport-design.md) (approved 2026-08-13). One plan doc per design phase; execute strictly in order — each plan's **GATES** header names the artifacts it consumes from earlier plans. Plans 1–2 are complete-code executable today; Plans 3–9 were planned 2026-08-13 with explicit resolve-at-execution gates (golden recordings and two spikes), per the scoping decision "all phases planned now, plan-per-slice fidelity."
+
+| # | Plan | Fidelity | Status |
+|---|------|----------|--------|
+| 1 | [Baseline, SDK inventory, vendored types + golden recordings](2026-08-13-cc-cli-transport-plan-1-baseline.md) | complete code | pending |
+| 2 | [Managed CC installs, smoke-gated update + rollback](2026-08-13-cc-cli-transport-plan-2-cc-installs.md) | complete code (1 spike gate) | pending |
+| 3 | [Turn runner + retargeted mapper](2026-08-13-cc-cli-transport-plan-3-turn-runner.md) | gated on Plan 1 recordings | pending |
+| 4 | [Permission MCP server, questions, permissionMode delta](2026-08-13-cc-cli-transport-plan-4-permissions.md) | gated on Plan 3 + spike | pending |
+| 5 | [Tool servers, settings-overlay hooks, skills](2026-08-13-cc-cli-transport-plan-5-tools-hooks.md) | gated on Plans 3–4 | pending |
+| 6 | [Transcript reconciler + PTY attach](2026-08-13-cc-cli-transport-plan-6-reconciler.md) | gated on Plan 3 + transcript fixture | pending |
+| 7 | [One-shot conversion + SDK deletion](2026-08-13-cc-cli-transport-plan-7-oneshot.md) | gated on Plans 3–5 | pending |
+| 8 | [Full-parity sweep + flag flip](2026-08-13-cc-cli-transport-plan-8-parity.md) | gated on Plans 3–7 | pending |
+| 9 | [Platform hardening, docs, release](2026-08-13-cc-cli-transport-plan-9-platforms.md) | gated on Plan 8 | pending |
+
+Supporting docs: [`2026-08-13-cc-transport-sdk-inventory.md`](2026-08-13-cc-transport-sdk-inventory.md) (created by Plan 1 Task 2).
+
+**Rules of the road** (bind every plan):
+- A gated plan is re-validated against its inputs before execution; if a gate finding contradicts the plan, the plan doc is amended first (committed), then executed — plans never drift silently from reality.
+- Status tables in each plan doc are updated as tasks land (statuses: pending / in\_progress / done; Tested and Pushed flipped only on real evidence).
+- The four CI gates (`typecheck`, `typecheck:web`, `build:web`, `bun test`) stay green at every commit.
+- Protocol edits happen in `docs/plans/anvil-protocol.ts` (the real file; `anvild/protocol.ts` is a symlink), with wire-type golden regen via `bun test/contract/regen-golden.ts`.
