@@ -1,7 +1,6 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { HookCallback } from "@anthropic-ai/claude-agent-sdk";
 import { GOAL_MAX_ITERATIONS, type SessionGoal } from "@protocol";
-import { claudeCliOptions } from "./cli";
+import { runCcMicroQuery, type CcMicroQueryOpts } from "../cc/oneshot";
 import type { Session } from "../session/session";
 
 export { GOAL_MAX_ITERATIONS };
@@ -47,14 +46,15 @@ export function parseVerdict(text: string): GoalVerdict {
 }
 
 /**
- * Judge whether `condition` is satisfied by the recent transcript. One-shot Haiku, no tools —
- * mirrors `classifyBranchKind`. Throws on timeout, transport failure, or an unparseable reply;
- * every one of those is fail-open at the call site (D6).
+ * Judge whether `condition` is satisfied by the recent transcript. One-shot Haiku, no tools
+ * (CLI-direct micro-query) — mirrors `classifyBranchKind`. Throws on timeout, transport failure,
+ * or an unparseable reply; every one of those is fail-open at the call site (D6).
  */
 export async function judgeGoal(
   condition: string,
   transcript: string,
   env: Record<string, string>,
+  cc?: Pick<CcMicroQueryOpts, "ccCommand" | "extraEnv">,
 ): Promise<GoalVerdict> {
   const prompt =
     `You are judging whether a coding agent has satisfied a stated goal.\n\n` +
@@ -67,35 +67,8 @@ export async function judgeGoal(
     `or\n` +
     `UNMET: <short reason, max 15 words>`;
 
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), 20_000);
-  try {
-    const q = query({
-      prompt,
-      options: {
-        model: "haiku",
-        settingSources: [],
-        allowedTools: [],
-        permissionMode: "bypassPermissions",
-        maxTurns: 1,
-        ...claudeCliOptions(),
-        abortController: ac,
-        env,
-      },
-    });
-    let text = "";
-    for await (const m of q) {
-      if (m.type === "assistant") {
-        for (const b of (m as { message?: { content?: Array<{ type: string; text?: string }> } }).message?.content ?? []) {
-          if (b.type === "text" && b.text) text += b.text;
-        }
-      }
-      if (m.type === "result") break;
-    }
-    return parseVerdict(text);
-  } finally {
-    clearTimeout(timer);
-  }
+  const text = await runCcMicroQuery(prompt, { model: "haiku", env, timeoutMs: 20_000, ...cc });
+  return parseVerdict(text);
 }
 
 /** Called when a goal resolves — met (true) or abandoned at the ceiling (false). */

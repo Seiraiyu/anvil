@@ -1,0 +1,3 @@
+{"type":"system","subtype":"init","cwd":"/tmp/micro","session_id":"micro-icon","model":"haiku","permissionMode":"default","tools":[],"slash_commands":[],"uuid":"00000000-0000-0000-0000-00000000000a"}
+{"type":"assistant","message":{"model":"haiku","id":"msg_micro-icon","type":"message","role":"assistant","content":[{"type":"text","text":"bug_report"}]},"parent_tool_use_id":null,"session_id":"micro-icon","uuid":"00000000-0000-0000-0000-00000000000b"}
+{"type":"result","subtype":"success","is_error":false,"duration_ms":5,"num_turns":1,"session_id":"micro-icon","total_cost_usd":0.001,"usage":{"input_tokens":5,"output_tokens":2},"result":"bug_report","uuid":"00000000-0000-0000-0000-00000000000c"}
