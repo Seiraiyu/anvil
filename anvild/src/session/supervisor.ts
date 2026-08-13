@@ -1449,7 +1449,18 @@ export class Supervisor {
   }
 
   interrupt(id: string): void {
-    this.require(id);
+    const s = this.require(id);
+    // Kill-during-awaiting (cc plan 4 task 8, design §7): a turn blocked in the MCP approve tool
+    // is awaiting a broker promise; SIGINT alone would strand it (and the card) forever. Force-deny
+    // parked prompts FIRST — the approve handler returns deny, the CLI can wind down cleanly — and
+    // retire the cards on every device. CC records the denial in its transcript, so the next
+    // --resume does not re-ask.
+    const denied = this.broker.resolveSession(id, "deny");
+    const cancelled = this.questionBroker.resolveSession(id);
+    if (denied > 0 || cancelled > 0) {
+      s.resolveAllPermissions();
+      s.resolveAllQuestions();
+    }
     void this.drivers.get(id)?.interrupt();
   }
 
