@@ -20,7 +20,7 @@
  * re-running against the same transcript is a no-op.
  */
 import type { ServerEvent } from "@protocol";
-import { mapMessage } from "../agent/map";
+import { askUserQuestionToolIds, mapMessage } from "../agent/map";
 import type { CCMessage } from "./stream";
 import type { MarkdownRenderer } from "../render/markdown";
 import type { SessionEventBody } from "../session/session";
@@ -46,6 +46,16 @@ export interface ReconcileOutcome {
  *  slash-command echoes/output (NOT reliably isMeta — pinned by the golden fixture), the
  *  interrupt marker, and compaction bookkeeping. */
 const CLI_INTERNAL_TEXT = /^\s*(<(command-name|command-message|command-args|local-command-stdout|local-command-caveat)|\[Request interrupted)/;
+
+/** The persisted divider label `newTopic()` (/clear) writes into the event log. It marks a topic
+ *  boundary: everything before it belongs to a PRIOR claudeSessionId, i.e. a different transcript. */
+export const NEW_TOPIC_DIVIDER_LABEL = "New topic";
+
+function isTopicBoundary(e: ServerEvent): boolean {
+  if (e.type !== "assistant.message") return false;
+  const blocks = (e as { blocks?: unknown }).blocks;
+  return Array.isArray(blocks) && blocks.some((b) => (b as { kind?: string; label?: string })?.kind === "divider" && (b as { label?: string }).label === NEW_TOPIC_DIVIDER_LABEL);
+}
 
 /** The text of a user PROMPT line: string content as-is, else its first text block (a daemon
  *  prompt with attachments appends attachment blocks after the text — the first block is the
@@ -82,6 +92,10 @@ export function reconcileTranscript(transcriptFile: string, deps: ReconcileDeps)
     } else if (e.type === "message.user") {
       const source = (e as { rendered?: { source?: unknown } }).rendered?.source;
       if (typeof source === "string") daemonPrompts.set(source, (daemonPrompts.get(source) ?? 0) + 1);
+    } else if (isTopicBoundary(e)) {
+      // Prompts logged before a /clear belong to a DIFFERENT transcript — never let them absorb
+      // an identically-worded prompt from the current one (would silently drop a PTY/crash turn).
+      daemonPrompts.clear();
     } else if (e.type === "assistant.message" || e.type === "tool.use" || e.type === "tool.result") {
       uncorrelatedContent = true;
     }
@@ -107,7 +121,11 @@ export function reconcileTranscript(transcriptFile: string, deps: ReconcileDeps)
     }
   };
 
+  // AskUserQuestion tool_use ids seen while walking (from EVERY assistant line, deduped or not):
+  // their tool.result is the answers echo, suppressed on the live path — suppress it here too.
+  const askIds = new Set<string>();
   for (const l of msgs) {
+    if (l.type === "assistant") for (const id of askUserQuestionToolIds(l as unknown as CCMessage)) askIds.add(id);
     if (l.type === "user" && !isToolResultLine(l)) {
       const text = promptText(l);
       if (text === undefined || text.trim() === "" || CLI_INTERNAL_TEXT.test(text)) continue;
@@ -126,7 +144,7 @@ export function reconcileTranscript(transcriptFile: string, deps: ReconcileDeps)
     // Assistant lines and tool-result user lines are shaped exactly like their stream-json
     // twins — same mapper, same renderer as a live turn (mapMessage stamps ccUuid from the
     // line's own uuid). Thinking-only assistant lines map to nothing, correctly.
-    emitAll(mapMessage(l as unknown as CCMessage, deps.renderer));
+    emitAll(mapMessage(l as unknown as CCMessage, deps.renderer).filter((b) => !(b.type === "tool.result" && askIds.delete(b.toolUseId))));
   }
 
   return { backfilled, scanned, warns };

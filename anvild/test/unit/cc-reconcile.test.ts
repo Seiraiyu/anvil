@@ -140,3 +140,39 @@ test("meta/sidechain/CLI-internal lines never backfill", () => {
   expect((emitted[0] as any).rendered.source).toBe("keep me");
   expect(outcome.scanned).toBe(1);
 });
+
+test("a /clear boundary stops prior-topic prompts from absorbing the new topic's lines", () => {
+  const dir = mkdtempSync(join(tmpdir(), "anvil-reconcile-"));
+  const file = join(dir, "t.jsonl");
+  writeFileSync(file, `${JSON.stringify({ type: "user", uuid: "u-new", sessionId: "s2", message: { role: "user", content: "continue" } })}\n`);
+
+  const boundary: SessionEventBody = {
+    type: "assistant.message",
+    blocks: [{ kind: "divider", label: "New topic", note: "…" }],
+  } as unknown as SessionEventBody;
+
+  // Same wording in the OLD topic, then /clear: the new transcript's "continue" must backfill.
+  const { emitted } = run(file, [daemonPrompt("continue"), boundary]);
+  expect(emitted.length).toBe(1);
+  expect((emitted[0] as any).ccUuid).toBe("u-new");
+
+  // Control: without the boundary the daemon-logged prompt legitimately absorbs it.
+  const control = run(file, [daemonPrompt("continue")]);
+  expect(control.emitted).toEqual([]);
+});
+
+test("AskUserQuestion answer echoes never backfill as tool-result cards (live-path parity)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "anvil-reconcile-"));
+  const file = join(dir, "t.jsonl");
+  const rows = [
+    { type: "assistant", uuid: "a1", message: { content: [{ type: "tool_use", id: "q1", name: "AskUserQuestion", input: { questions: [] } }] } },
+    { type: "user", uuid: "u1", message: { content: [{ type: "tool_result", tool_use_id: "q1", content: "chosen answers" }] } },
+    { type: "user", uuid: "u2", message: { content: [{ type: "tool_result", tool_use_id: "t9", content: "a REAL tool result" }] } },
+  ];
+  writeFileSync(file, `${rows.map((r) => JSON.stringify(r)).join("\n")}\n`);
+  const { emitted } = run(file, []);
+  // the question's tool_use is suppressed by the mapper and its echo by the reconciler;
+  // the unrelated tool result still lands
+  expect(emitted.map((e) => e.type)).toEqual(["tool.result"]);
+  expect((emitted[0] as any).toolUseId).toBe("t9");
+});

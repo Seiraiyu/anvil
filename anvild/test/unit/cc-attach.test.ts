@@ -121,3 +121,21 @@ test("terminal.open on the reserved cc termId without an attach is refused", asy
   expect(created.length).toBe(0); // and no shell was spawned under the reserved id
   rmSync(dir, { recursive: true, force: true });
 });
+
+test("archive and reset release the attach gate (no stuck attached state)", async () => {
+  const { sup, id, dir, created } = await harness();
+  const s = sup.get(id)!;
+  s.data.claudeSessionId = "sid-123";
+
+  sup.ccAttach(id, 80, 24);
+  await sup.archive(id);
+  expect(s.data.attached).toBe(false); // synchronously, not waiting on the PTY's async exit
+  expect(created[0]!.pty.closed).toBe(true);
+
+  sup.unarchive(id);
+  sup.ccAttach(id, 80, 24);
+  await sup.reset(id);
+  expect(s.data.attached).toBe(false);
+  expect(created[1]!.pty.closed).toBe(true);
+  rmSync(dir, { recursive: true, force: true });
+});

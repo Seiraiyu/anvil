@@ -64,7 +64,7 @@ import { FileWatchManager } from "./file-watch-manager";
 import { createWorktree, gitStatus, gitStatusAsync, recreateWorktree, removeWorktree, worktreeHealth } from "./worktree";
 import { AgentDriver, type TurnUsage } from "../agent/driver";
 import { TurnRunner, resolveCcCommand, type SessionDriver } from "../cc/turn-runner";
-import { reconcileTranscript } from "../cc/reconcile";
+import { NEW_TOPIC_DIVIDER_LABEL, reconcileTranscript } from "../cc/reconcile";
 import { transcriptPath } from "../cc/transcript";
 import { CcMcpConfig, CC_PERMISSION_TOOL } from "../cc/mcp-config";
 import { handleCcMcp } from "../cc/permission-server";
@@ -1243,6 +1243,7 @@ export class Supervisor {
     await this.drivers.get(id)?.stop();
     this.drivers.delete(id);
     this.fileWatchMgr.clear(id);
+    this.ccDetach(id, "archived"); // release the attach gate + backfill PTY turns BEFORE the PTYs are reaped
     this.terminalMgr.kill(id);
     s.data.archived = true;
     s.data.status = "idle";
@@ -1885,6 +1886,7 @@ export class Supervisor {
     await this.drivers.get(id)?.stop(); // a wedged/stale query is dropped; next prompt starts fresh
     this.drivers.delete(id);
     this.fileWatchMgr.clear(id);
+    this.ccDetach(id, "reset"); // reset must never LEAVE a stuck attached-gate (it's the recovery path)
     this.terminalMgr.kill(id);
     this.broker.resolveSession(id, "deny"); // unblock any hook parked on this session
     this.questionBroker.resolveSession(id); // cancel any AskUserQuestion parked on this session
@@ -2053,8 +2055,10 @@ export class Supervisor {
       type: "assistant.message",
       blocks: [
         {
+          // The label doubles as the reconciler's topic-boundary marker (cc plan 6): prompts
+          // logged before it must never dedupe-absorb the new topic's transcript lines.
           kind: "divider",
-          label: "New topic",
+          label: NEW_TOPIC_DIVIDER_LABEL,
           note: "The earlier conversation is above for reference; Claude no longer has it in context.",
         },
       ],
