@@ -364,7 +364,13 @@ export type ContentBlock =
   | { kind: "tool_use"; toolUseId: ToolUseId; name: string; input: unknown }
   // A full-width topic boundary (§0.6, "new topic"): a labelled rule that visually clears the pane
   // without deleting scrollback. `note` is an optional muted sub-line under the label.
-  | { kind: "divider"; label: string; note?: string };
+  | { kind: "divider"; label: string; note?: string }
+  // CC output this daemon version doesn't recognize (cc-cli-transport §4.7 delta 3): an unknown
+  // top-level stream-json type or an unknown content-block type inside an assistant message.
+  // Never dropped — rendered as a collapsed raw-JSON card. `ccType` is the CC-side type string;
+  // `json` is the pretty-printed payload, size-capped by the producer. Rides assistant.message
+  // (and therefore the snapshot's "assistant" arm) — deliberately NOT a new event type.
+  | { kind: "fallback"; ccType: string; json: string };
 
 /** One conversation log entry — what `conversation.snapshot` replays (§6.4).
  *  `ts` is the wall-clock time the entry was first emitted, carried through so a replayed
