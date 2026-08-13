@@ -65,7 +65,7 @@ export class QuestionBroker {
 }
 
 /** Coerce the SDK's opaque dialog payload `questions` into our typed shape (defensive). */
-function normalizeQuestions(raw: unknown): Question[] {
+export function normalizeQuestions(raw: unknown): Question[] {
   if (!Array.isArray(raw)) return [];
   const out: Question[] = [];
   for (const q of raw) {

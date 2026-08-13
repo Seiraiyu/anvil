@@ -62,6 +62,8 @@ import { FileWatchManager } from "./file-watch-manager";
 import { createWorktree, gitStatus, gitStatusAsync, recreateWorktree, removeWorktree, worktreeHealth } from "./worktree";
 import { AgentDriver, type TurnUsage } from "../agent/driver";
 import { TurnRunner, type SessionDriver } from "../cc/turn-runner";
+import { CcMcpConfig, CC_PERMISSION_TOOL } from "../cc/mcp-config";
+import { handleCcMcp } from "../cc/permission-server";
 import { skillPlugins } from "../agent/skills";
 import type { PlanProposedHook } from "../agent/permissions";
 import { buildDefaultToolsServer, DEFAULT_MCP_SERVER_NAME, DEFAULT_TOOL_IDS } from "../agent/default-tools";
@@ -140,6 +142,8 @@ export interface SupervisorConfig {
   envFile?: string;
   /** The tailnet-facing port (== ANVIL_PORT). Used to build this daemon's self-URL for deep links. */
   port?: number;
+  /** The daemon's bound host — the CC CLI's MCP config points back at it (cc plan 4). */
+  host?: string;
   /** Where repos added by git URL get cloned (see `Config.clonesDir`). Defaults to `<stateDir>/repos`. */
   clonesDir?: string;
   warnFraction?: number;
@@ -179,6 +183,8 @@ export class Supervisor {
   private telemetryBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly broker = new PermissionBroker();
   private readonly questionBroker = new QuestionBroker();
+  /** Per-session MCP bearer + .mcp.json writer for the CLI-direct transport (cc plan 4). */
+  private readonly ccMcpCfg: CcMcpConfig;
   /** Sessions whose awaiting_permission state has been announced to the whole fleet (list badge). */
   private readonly awaitingAnnounced = new Set<string>();
   /** Sessions with an outstanding "your turn" push out on devices — so we can send a matching
@@ -254,6 +260,7 @@ export class Supervisor {
   constructor(cfg: SupervisorConfig, private readonly registry: ConnectionRegistry) {
     this.renderer = cfg.renderer ?? new PassthroughRenderer();
     this.selfPort = cfg.port ?? 7701;
+    this.ccMcpCfg = new CcMcpConfig({ stateDir: cfg.stateDir, host: cfg.host, port: cfg.port ?? 7701 });
     this.clonesDir = cfg.clonesDir ?? join(cfg.stateDir, "repos");
     this.adversarial = {
       models: cfg.adversarialModels ?? [],
@@ -1409,6 +1416,12 @@ export class Supervisor {
           onResult: (usage) => this.onAgentResult(id, usage),
           onCommands: (commands) => this.onSessionCommands(id, commands),
           onTurnError: (err) => this.onTurnError(err),
+          // The daemon's approve tool answers everything CC's engine would prompt for — including
+          // AskUserQuestion (spike finding c). Config rewritten per spawn: bearer rotations land.
+          permissionArgs: () => [
+            "--mcp-config", this.ccMcpCfg.writeConfig(id),
+            "--permission-prompt-tool", CC_PERMISSION_TOOL,
+          ],
         });
         this.drivers.set(id, runner);
         return runner;
@@ -1454,6 +1467,17 @@ export class Supervisor {
   interrupt(id: string): void {
     this.require(id);
     void this.drivers.get(id)?.interrupt();
+  }
+
+  /** The CC CLI's MCP `approve` endpoint for one session (cc plan 4, design §4.4). Bearer-gated:
+   *  only the CLI process holding this session's .mcp.json can reach the brokers. */
+  async ccMcpRequest(sessionId: string, req: Request): Promise<Response> {
+    if (!this.ccMcpCfg.verify(sessionId, req.headers.get("authorization"))) {
+      return new Response("unauthorized", { status: 401 });
+    }
+    const s = this.sessions.get(sessionId);
+    if (!s) return new Response("no such session", { status: 404 });
+    return handleCcMcp(req, { session: s, broker: this.broker, questionBroker: this.questionBroker });
   }
 
   /** Answer a parked permission prompt (arch §6.6) — may come from any device. */
@@ -1706,6 +1730,7 @@ export class Supervisor {
     this.terminalMgr.kill(id);
     this.broker.resolveSession(id, "deny"); // unblock any hook parked on this session
     this.questionBroker.resolveSession(id); // cancel any AskUserQuestion parked on this session
+    this.ccMcpCfg.rotate(id); // stale CLI .mcp.json bearers fail closed after a reset (cc plan 4)
     s.resolveAllPermissions(); // retire every parked card on every device (fan-out: there may be several)
     s.resolveAllQuestions();
 
@@ -1859,6 +1884,7 @@ export class Supervisor {
     this.drivers.delete(id);
     this.broker.resolveSession(id, "deny"); // unblock any parked permission
     this.questionBroker.resolveSession(id); // cancel any parked AskUserQuestion
+    this.ccMcpCfg.rotate(id); // fresh bearer for the fresh topic (cc plan 4)
     s.resolveAllPermissions(); // retire every parked card on every device (fan-out: there may be several)
     s.resolveAllQuestions();
     s.data.claudeSessionId = undefined; // the key line: forget the prior topic (no resume next turn)

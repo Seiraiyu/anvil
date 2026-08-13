@@ -48,7 +48,7 @@ export class PermissionBroker {
   }
 }
 
-const SUGGESTIONS = (tool: string): PermissionSuggestion[] => [
+export const SUGGESTIONS = (tool: string): PermissionSuggestion[] => [
   { decision: "allow", label: "Allow once" },
   { decision: "allow_always", label: `Always allow ${tool} this session` },
   { decision: "deny", label: "Deny" },

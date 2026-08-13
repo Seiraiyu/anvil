@@ -54,6 +54,10 @@ export interface TurnRunnerDeps {
   ccCommand?: string[];
   /** CLI permission engine mode until Plans 4–5 wire the daemon broker. */
   permissionMode?: string;
+  /** Extra spawn args wiring the daemon's MCP approve endpoint (plan 4): called per spawn so a
+   *  freshly-rotated bearer lands in the .mcp.json the CLI reads. Absent ⇒ no permission bridge
+   *  (unit tests; CC's own engine denies mutating tools in -p default mode). */
+  permissionArgs?: () => string[];
   /** SIGINT → this grace → SIGKILL (design decision: 5s). */
   interruptGraceMs?: number;
 }
@@ -144,6 +148,7 @@ export class TurnRunner implements SessionDriver {
       // settingSources: [] and keeps `init` the first stream line (plan-1 finding).
       "--setting-sources", "",
       "--strict-mcp-config",
+      ...(this.deps.permissionArgs?.() ?? []),
       ...(this.systemPromptAppend() ? ["--append-system-prompt", this.systemPromptAppend()] : []),
       ...(s.data.claudeSessionId ? ["--resume", s.data.claudeSessionId] : []),
     ];

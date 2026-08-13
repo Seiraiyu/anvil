@@ -231,6 +231,7 @@ export function createServer(opts: ServerOptions): ServerHandle {
     {
       stateDir: opts.stateDir,
       port: opts.port,
+      host: opts.host,
       accounts,
       pairedHub,
       // Lazy on purpose: `pushRosterInBackground` closes over `fleet`/`accounts`/`identity`, all of
@@ -690,6 +691,11 @@ export function createServer(opts: ServerOptions): ServerHandle {
 
   // ── Frozen CC update API v1 (cc-cli-transport design §4.8; additive-only, breaking ⇒ /v2) ─────
   // GET status/check (observe), POST apply (download+smoke+flip, client polls status), POST rollback.
+  // The CC CLI's per-session MCP approve endpoint (cc plan 4, design §4.4). Bearer-gated inside
+  // the supervisor (per-session secret from the session's own .mcp.json) — deliberately NOT
+  // identity-gated: the caller is a local CLI process with no tailscale headers.
+  routeRe("POST", /^\/api\/cc\/mcp\/([^/]+)$/, (req, _url, m) => supervisor.ccMcpRequest(decodeURIComponent(m![1]!), req));
+
   route("GET", "/api/cc/v1/status", () => Response.json({ ccApiVersion: CC_API_VERSION, ...ccUpdater.status() }));
   route("GET", "/api/cc/v1/check", async () => Response.json({ ccApiVersion: CC_API_VERSION, ...(await ccUpdater.check()) }));
   route("POST", "/api/cc/v1/apply", async (req, _url, _m, ctx) => {
