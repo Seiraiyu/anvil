@@ -23,6 +23,7 @@ const env = process.env;
 const args = process.argv.slice(2);
 
 if (env.FAKE_CC_ARGS_FILE) writeFileSync(env.FAKE_CC_ARGS_FILE, JSON.stringify(args));
+if (env.FAKE_CC_ENV_FILE) writeFileSync(env.FAKE_CC_ENV_FILE, JSON.stringify(env));
 
 if (env.FAKE_CC_IGNORE_SIGINT === "1") {
   process.on("SIGINT", () => {});
