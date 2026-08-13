@@ -6,13 +6,20 @@
 
 | Task | Description | Status | Tested | Pushed |
 |------|-------------|--------|--------|--------|
-| 1 | Verify fork CI baseline green | pending | no | no |
-| 2 | Commit SDK usage inventory doc | pending | no | no |
-| 3 | Vendored `CCMessage` types + line parser (test first) | pending | no | no |
-| 4 | `NdjsonSplitter` incremental line buffer (test first) | pending | no | no |
-| 5 | Recording tool `test/tools/record-cc-stream.ts` | pending | no | no |
-| 6 | Record + check in golden fixtures (LIVE — needs `claude` auth) | pending | no | no |
-| 7 | Golden replay test over fixtures | pending | no | no |
+| 1 | Verify fork CI baseline green | done | yes | yes |
+| 2 | Commit SDK usage inventory doc | done | yes | yes |
+| 3 | Vendored `CCMessage` types + line parser (test first) | done | yes | yes |
+| 4 | `NdjsonSplitter` incremental line buffer (test first) | done | yes | yes |
+| 5 | Recording tool `test/tools/record-cc-stream.ts` | done | yes | yes |
+| 6 | Record + check in golden fixtures (LIVE — needs `claude` auth) | done | yes | yes |
+| 7 | Golden replay test over fixtures | done | yes | yes |
+
+Execution notes (2026-08-13): baseline required one fork-local fix (WEB2-6 test timeout on slow
+machines — tracked in `2026-08-13-upstream-candidates.md`). Recorder gained
+`--setting-sources "" --strict-mcp-config` to match the daemon's `settingSources: []`.
+Reconciliations from real cc 2.1.231 streams: `rate_limit_event` vendored as KNOWN; Spike 3
+answered (thinking deltas present) — recorded in design §9 item 3. Inventory line refs corrected
+against the code (`branch-kind.ts:48`, `icon.ts:34`).
 
 Conventions for every task: run commands from `anvild/`; tests are flat `test(...)` with a header comment naming the design clause they guard; temp dirs via `mkdtempSync(join(tmpdir(), "anvil-cc-…"))` (the repo's dominant idiom).
 
