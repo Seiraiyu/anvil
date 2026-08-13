@@ -7,14 +7,34 @@
 
 | Task | Description | Status | Tested | Pushed |
 |------|-------------|--------|--------|--------|
-| 1 | SPIKE (LIVE): permission-tool round trip + AskUserQuestion behavior in `-p` mode | pending | no | no |
-| 2 | `cc/permission-server.ts`: MCP endpoint + `approve` tool → brokers | pending | no | no |
-| 3 | `cc/mcp-config.ts`: per-session `.mcp.json` writer + bearer lifecycle | pending | no | no |
-| 4 | Question path: reproduce `questions.ts:118-133` wire shape (or spike fallback) | pending | no | no |
-| 5 | Protocol delta 1: `AutonomyPolicy` → `PermissionMode` (9 sites) + goldens regen | pending | no | no |
-| 6 | Web: picker relabel in `dialogs.ts` (one file) + offline-outbox hazard note | pending | no | no |
-| 7 | Delete `danger-list.ts`, autonomy engine, `auth/guard.ts`, `auth/degrade.ts`; rewire `onTurnError` | pending | no | no |
-| 8 | Kill-during-`awaiting_permission` semantics + tests | pending | no | no |
+| 1 | SPIKE (LIVE): permission-tool round trip + AskUserQuestion behavior in `-p` mode | done | yes | yes |
+| 2 | `cc/permission-server.ts`: MCP endpoint + `approve` tool → brokers | done | yes | yes |
+| 3 | `cc/mcp-config.ts`: per-session `.mcp.json` writer + bearer lifecycle | done | yes | yes |
+| 4 | Question path: reproduce `questions.ts:118-133` wire shape (or spike fallback) | done | yes | yes |
+| 5 | Protocol delta 1: `AutonomyPolicy` → `PermissionMode` (9 sites) + goldens regen | done | yes | yes |
+| 6 | Web: picker relabel in `dialogs.ts` (one file) + offline-outbox hazard note | done | yes | yes |
+| 7 | Delete `danger-list.ts`, autonomy engine, `auth/guard.ts`, `auth/degrade.ts`; rewire `onTurnError` | done | yes | yes |
+| 8 | Kill-during-`awaiting_permission` semantics + tests | done | yes | yes |
+
+Execution notes (2026-08-13):
+- **Assumption 3 fully confirmed live** (`test/tools/probe-cc-permission.ts`, cc 2.1.231): the
+  approve tool receives prompt-worthy calls AND AskUserQuestion; allow/deny/updatedInput honored;
+  .mcp.json bearer headers arrive; CC auto-allows safe commands (the "allowlisted → no dialog"
+  acceptance for free). No PreToolUse fallback needed — Task 4 rides the approve tool.
+- **PROTOCOL_VERSION 4→5** (breaking rename per policy). `regen-golden.ts` was silently broken
+  (importing a .test.ts throws outside the runner) — helper extracted to `wire-types.ts`.
+- **Wider blast radius than the 9-site inventory**: the rename reached team-gate/team-coordinator/
+  autopilot defaults (interactive `default`, autostart `bypassPermissions`); the SDK path went
+  CC-native too (hook no longer decides; engine asks park via shared `askPermission` used by both
+  transports); the danger table survives ONLY inside pipeline-guard ([SEC-H4]); `checkAuth`'s
+  shape check moved to accounts.ts (roster/health UX) while the §3 boot refusal + auto-degrade
+  tracker (scheduler skips, recover endpoint, reflection gate) were deleted.
+- **Phase acceptance (§5.4) passed live end-to-end**: TurnRunner + real claude → daemon MCP
+  endpoint → permission card (`awaiting_permission`) → allow via `resolvePermission` → command ran;
+  AskUserQuestion → question card → answer → model echoed it. Kill-during-awaiting force-denies
+  parked prompts (supervisor.interrupt) so the CLI never hangs on the approve response.
+- **Plan-8 flag**: `buildAgentEnv` still REQUIRES a roster token; the CLI itself can auth via its
+  own keychain/credentials — revisit under defer-to-CC when the SDK path is deleted.
 
 Fixed decisions and known facts:
 - **Task 1 spike** extends the existing scaffolding `test/tools/probe-askquestion.ts` (already in-repo): drive a real `-p` turn whose settings force a prompt; verify (a) the CLI calls the configured MCP `approve` tool, (b) `{behavior:"allow", updatedInput}` is honored, (c) AskUserQuestion arrives via the same channel and the exact shape from `questions.ts:118-133` — `updatedInput: {...input, answers: {[exact question text]: label | label[]}, annotations?}` — injects answers. Record findings as comments in the probe. **If (c) fails:** documented fallback (design §4.4) — a PreToolUse CC hook in the session settings overlay that parks the question and returns the answer; Task 4 then builds that instead.
