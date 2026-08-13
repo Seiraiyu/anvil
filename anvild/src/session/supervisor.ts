@@ -1545,7 +1545,15 @@ export class Supervisor {
     }
     const s = this.sessions.get(sessionId);
     if (!s) return new Response("no such session", { status: 404 });
-    if (!server) return handleCcMcp(req, { session: s, broker: this.broker, questionBroker: this.questionBroker });
+    if (!server) {
+      return handleCcMcp(req, {
+        session: s,
+        broker: this.broker,
+        questionBroker: this.questionBroker,
+        // ExitPlanMode → adversarial plan review (advisory) before the approval card (cc plan 8).
+        planProposed: this.planReviewer(s),
+      });
+    }
     const toolServer = this.ccToolServerFor(s);
     if (!toolServer || toolServer.name !== server) return new Response(`no such tool server: ${server}`, { status: 404 });
     return handleToolServer(req, toolServer);
@@ -1733,10 +1741,11 @@ export class Supervisor {
    * never blocks the plan. Self-gates every call (not at construction) so a toggle flip or an OpenRouter
    * key set from Settings → Models mid-session takes effect on the very next plan, mirroring how the
    * autopilot panel resolves its key live (see runAutopilot). (adversarial panel)
+   *
+   * Rides the CC approve tool since cc plan 8: ExitPlanMode arrives at handleCcMcp like any other
+   * prompt-worthy call, and the permission server awaits this hook with `input.plan` before parking
+   * the approval card — critique first, then the human decides.
    */
-  // TODO(cc plan 8): currently UNCALLED — its only caller was the SDK AgentDriver's plan-proposed
-  // hook (deleted in plan 7). Rewire onto the CC ExitPlanMode flow (the approve tool sees
-  // input.plan) or decide to drop the feature. Tracked in plan 8's parity hot-spot list.
   private planReviewer(s: Session): PlanProposedHook {
     return async (plan: string) => {
       if (!s.data.adversarialReview || !plan.trim()) return; // not opted in / nothing to review

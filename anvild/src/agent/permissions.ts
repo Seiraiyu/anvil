@@ -53,9 +53,10 @@ export const SUGGESTIONS = (tool: string): PermissionSuggestion[] => [
 ];
 
 /**
- * Called when the model asks to leave plan mode (ExitPlanMode) with its finished plan. Lets the
- * daemon run the adversarial panel over the plan before it's approved (advisory only — see the
- * supervisor's planReviewer). Awaited so the critique lands before execution; must never throw.
+ * Called when the model asks to leave plan mode (ExitPlanMode) with its finished plan — the CLI
+ * transport's approve tool (cc/permission-server.ts) awaits it before parking the approval card.
+ * Lets the daemon run the adversarial panel over the plan before it's approved (advisory only — see
+ * the supervisor's planReviewer). Awaited so the critique lands before approval; must never throw.
  */
 export type PlanProposedHook = (plan: string) => Promise<void>;
 

@@ -156,3 +156,58 @@ test("unknown tool name is a JSON-RPC error, not a crash", async () => {
   const res = (await (await handleCcMcp(rpc("tools/call", { name: "nope", arguments: {} }), d)).json()) as any;
   expect(res.error).toBeDefined();
 });
+
+// --- ExitPlanMode → planProposed (cc plan 8: the adversarial plan review's new caller) ---
+
+test("ExitPlanMode awaits planProposed with input.plan BEFORE parking the approval card", async () => {
+  const { s, perms } = fakeSession("s1");
+  const seen: string[] = [];
+  let cardsAtReviewTime = -1;
+  const d = {
+    ...deps(s),
+    planProposed: async (plan: string) => {
+      seen.push(plan);
+      cardsAtReviewTime = perms.length; // critique must land before the card fans out
+    },
+  };
+  const pending = callApprove(d, { tool_name: "ExitPlanMode", input: { plan: "# The plan" } });
+  await new Promise((r) => setTimeout(r, 10));
+  expect(seen).toEqual(["# The plan"]);
+  expect(cardsAtReviewTime).toBe(0);
+  expect(perms).toHaveLength(1);
+  d.broker.resolve(perms[0]!.requestId, "allow");
+  expect((await (await pending)).behavior).toBe("allow");
+});
+
+test("planProposed still runs when ExitPlanMode is allow_always-remembered (shortcut skips only the card)", async () => {
+  const { s, allowed } = fakeSession("s1");
+  allowed.add("ExitPlanMode");
+  const seen: string[] = [];
+  const d = { ...deps(s), planProposed: async (plan: string) => void seen.push(plan) };
+  const out = await (await callApprove(d, { tool_name: "ExitPlanMode", input: { plan: "P" } }));
+  expect(out.behavior).toBe("allow");
+  expect(seen).toEqual(["P"]);
+});
+
+test("a throwing planProposed cannot fail the approve RPC; other tools never trigger it", async () => {
+  const { s, perms } = fakeSession("s1");
+  let calls = 0;
+  const d = {
+    ...deps(s),
+    planProposed: async () => {
+      calls++;
+      throw new Error("panel exploded");
+    },
+  };
+  const pending = callApprove(d, { tool_name: "ExitPlanMode", input: { plan: "P" } });
+  await new Promise((r) => setTimeout(r, 10));
+  expect(perms).toHaveLength(1); // review failure didn't strand the card
+  d.broker.resolve(perms[0]!.requestId, "allow");
+  expect((await (await pending)).behavior).toBe("allow");
+  // A non-plan tool goes straight to the broker without consulting the hook.
+  const other = callApprove(d, { tool_name: "Bash", input: { command: "ls" } });
+  await new Promise((r) => setTimeout(r, 10));
+  expect(calls).toBe(1);
+  d.broker.resolve(perms[1]!.requestId, "allow");
+  expect((await (await other)).behavior).toBe("allow");
+});

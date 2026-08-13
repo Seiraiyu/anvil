@@ -14,7 +14,7 @@
  * here without a card); CC-native config is never touched.
  */
 import { newId } from "../util/ids";
-import { SUGGESTIONS, type PermissionBroker } from "../agent/permissions";
+import { SUGGESTIONS, type PermissionBroker, type PlanProposedHook } from "../agent/permissions";
 import { normalizeQuestions, type QuestionBroker } from "../agent/questions";
 import type { Session } from "../session/session";
 
@@ -22,6 +22,10 @@ export interface CcPermissionDeps {
   session: Session;
   broker: PermissionBroker;
   questionBroker: QuestionBroker;
+  /** Awaited with `input.plan` when ExitPlanMode reaches the approve tool — the adversarial
+   *  plan-review seam (supervisor.planReviewer). Advisory only; runs BEFORE the approval card so
+   *  the critique lands in the conversation while the human decides. */
+  planProposed?: PlanProposedHook;
 }
 
 interface RpcRequest {
@@ -95,6 +99,16 @@ async function handlePermission(
   input: Record<string, unknown>,
 ): Promise<PermissionResult> {
   const s = deps.session;
+  // ExitPlanMode carries the finished plan — run the advisory adversarial review before anything
+  // else (including the allow_always shortcut, which would otherwise skip it), so the critique is
+  // in the conversation before the plan can be approved. The hook self-gates and never throws
+  // (supervisor.planReviewer); the catch is belt-and-braces so a review failure can't fail the
+  // approve RPC and strand the turn.
+  if (toolName === "ExitPlanMode" && deps.planProposed) {
+    try {
+      await deps.planProposed(String(input.plan ?? ""));
+    } catch {}
+  }
   // A remembered "always allow" answers the re-ask inside the daemon — no card, no round trip.
   if (s.isAlwaysAllowed(toolName)) return { behavior: "allow", updatedInput: input };
 
