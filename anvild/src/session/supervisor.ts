@@ -51,7 +51,7 @@ import {
   type ResumeWatermarksEvent,
   type TelemetrySnapshotEvent,
 } from "@protocol";
-import { GOAL_MAX_ITERATIONS, parseGoalCommand, type GoalCommand } from "../agent/goal";
+import { GOAL_MAX_ITERATIONS, judgeGoal, parseGoalCommand, type GoalCommand, type GoalVerdict } from "../agent/goal";
 import { now } from "../util/envelope";
 import { newId } from "../util/ids";
 import type { ConnectionRegistry } from "../server/registry";
@@ -65,6 +65,7 @@ import { AgentDriver, type TurnUsage } from "../agent/driver";
 import { TurnRunner, type SessionDriver } from "../cc/turn-runner";
 import { CcMcpConfig, CC_PERMISSION_TOOL } from "../cc/mcp-config";
 import { handleCcMcp } from "../cc/permission-server";
+import { handleToolServer, type AnvilToolServer } from "../cc/tool-host";
 import { skillPlugins } from "../agent/skills";
 import type { PlanProposedHook } from "../agent/permissions";
 import { buildDefaultToolsServer, DEFAULT_MCP_SERVER_NAME, DEFAULT_TOOL_IDS } from "../agent/default-tools";
@@ -144,6 +145,8 @@ export interface SupervisorConfig {
   port?: number;
   /** The daemon's bound host — the CC CLI's MCP config points back at it (cc plan 4). */
   host?: string;
+  /** Test-only override of the goal judge (the real one spawns a haiku one-shot). */
+  goalJudge?: (condition: string, transcript: string, env: Record<string, string>) => Promise<GoalVerdict>;
   /** Where repos added by git URL get cloned (see `Config.clonesDir`). Defaults to `<stateDir>/repos`. */
   clonesDir?: string;
   warnFraction?: number;
@@ -185,6 +188,8 @@ export class Supervisor {
   private readonly questionBroker = new QuestionBroker();
   /** Per-session MCP bearer + .mcp.json writer for the CLI-direct transport (cc plan 4). */
   private readonly ccMcpCfg: CcMcpConfig;
+  /** The goal judge (cc plan 5 stop hook); injectable so tests never spawn the one-shot. */
+  private readonly goalJudge: NonNullable<SupervisorConfig["goalJudge"]>;
   /** Sessions whose awaiting_permission state has been announced to the whole fleet (list badge). */
   private readonly awaitingAnnounced = new Set<string>();
   /** Sessions with an outstanding "your turn" push out on devices — so we can send a matching
@@ -259,6 +264,7 @@ export class Supervisor {
     this.renderer = cfg.renderer ?? new PassthroughRenderer();
     this.selfPort = cfg.port ?? 7701;
     this.ccMcpCfg = new CcMcpConfig({ stateDir: cfg.stateDir, host: cfg.host, port: cfg.port ?? 7701 });
+    this.goalJudge = cfg.goalJudge ?? judgeGoal;
     this.clonesDir = cfg.clonesDir ?? join(cfg.stateDir, "repos");
     this.adversarial = {
       models: cfg.adversarialModels ?? [],
@@ -1401,11 +1407,18 @@ export class Supervisor {
           onCommands: (commands) => this.onSessionCommands(id, commands),
           onTurnError: (err) => this.onTurnError(err),
           // The daemon's approve tool answers everything CC's engine would prompt for — including
-          // AskUserQuestion (spike finding c). Config rewritten per spawn: bearer rotations land.
-          permissionArgs: () => [
-            "--mcp-config", this.ccMcpCfg.writeConfig(id),
-            "--permission-prompt-tool", CC_PERMISSION_TOOL,
-          ],
+          // AskUserQuestion (spike finding c) — and the session's role tool server + the goal
+          // Stop hook ride the same per-spawn config, so bearer rotations and role changes land.
+          permissionArgs: () => {
+            const overlay = this.ccMcpCfg.writeSettingsOverlay(id, { goalStopHook: true });
+            const ids = this.ccToolIdsFor(s);
+            return [
+              "--mcp-config", this.ccMcpCfg.writeConfig(id, this.ccToolServerFor(s) ? [this.ccToolServerFor(s)!.name] : []),
+              "--permission-prompt-tool", CC_PERMISSION_TOOL,
+              ...(ids.length ? ["--allowedTools", ids.join(",")] : []),
+              ...(overlay ? ["--settings", overlay] : []),
+            ];
+          },
         });
         this.drivers.set(id, runner);
         return runner;
@@ -1458,15 +1471,82 @@ export class Supervisor {
     void this.drivers.get(id)?.interrupt();
   }
 
-  /** The CC CLI's MCP `approve` endpoint for one session (cc plan 4, design §4.4). Bearer-gated:
-   *  only the CLI process holding this session's .mcp.json can reach the brokers. */
-  async ccMcpRequest(sessionId: string, req: Request): Promise<Response> {
+  /** The CC CLI's MCP endpoints for one session (cc plans 4–5). Bearer-gated: only the CLI
+   *  process holding this session's .mcp.json can reach the brokers/tools. No `server` ⇒ the
+   *  anvild approve tool (design §4.4); a server name ⇒ that role's daemon-hosted tool server
+   *  (design §4.5) — resolved per request so per-session deps (team/member/planning) stay live. */
+  async ccMcpRequest(sessionId: string, req: Request, server?: string): Promise<Response> {
     if (!this.ccMcpCfg.verify(sessionId, req.headers.get("authorization"))) {
       return new Response("unauthorized", { status: 401 });
     }
     const s = this.sessions.get(sessionId);
     if (!s) return new Response("no such session", { status: 404 });
-    return handleCcMcp(req, { session: s, broker: this.broker, questionBroker: this.questionBroker });
+    if (!server) return handleCcMcp(req, { session: s, broker: this.broker, questionBroker: this.questionBroker });
+    const toolServer = this.ccToolServerFor(s);
+    if (!toolServer || toolServer.name !== server) return new Response(`no such tool server: ${server}`, { status: 404 });
+    return handleToolServer(req, toolServer);
+  }
+
+  /** The session's role tool server, or undefined for plain sessions — the old AgentDriver
+   *  4-way ternary, now resolved at request/spawn time (cc plan 5 task 2). */
+  private ccToolServerFor(s: Session): AnvilToolServer | undefined {
+    if (s.data.isDefault === true) return this.defaultToolsServer;
+    if (s.data.teamRole === "lead") return this.teams.buildTeamServer(s.id);
+    if (s.data.teamRole === "member" && s.data.parentId) return this.teams.buildMemberServer(s.id);
+    if (s.data.workUnitRole === "planner" && s.data.workUnitId) return this.autopilot.buildPlanningServer(s.id);
+    return undefined;
+  }
+
+  /** The pre-approved tool ids for the session's role server (`--allowedTools`). */
+  private ccToolIdsFor(s: Session): string[] {
+    if (s.data.isDefault === true) return [...DEFAULT_TOOL_IDS];
+    if (s.data.teamRole === "lead") return [...TEAM_TOOL_IDS];
+    if (s.data.teamRole === "member" && s.data.parentId) return [...MEMBER_TOOL_IDS];
+    if (s.data.workUnitRole === "planner" && s.data.workUnitId) return [...PLANNING_TOOL_IDS];
+    return [];
+  }
+
+  /**
+   * The CC `Stop` hook callback (cc plan 5 task 4) — agent/goal.ts `makeStopHook` semantics over
+   * HTTP. The overlay's curl POSTs the hook's stdin JSON here; our JSON reply is the hook's
+   * stdout. Hard-won contract (goal.ts spike): an unmet goal must answer
+   * `{"decision":"block","reason"}` — additionalContext is refused by the model as injection.
+   */
+  async ccStopHook(sessionId: string, req: Request): Promise<Response> {
+    if (!this.ccMcpCfg.verify(sessionId, req.headers.get("authorization"))) {
+      return new Response("unauthorized", { status: 401 });
+    }
+    const s = this.sessions.get(sessionId);
+    if (!s) return new Response("no such session", { status: 404 });
+    await req.text().catch(() => ""); // drain the hook's stdin payload; goal state lives daemon-side
+
+    const goal = s.data.goal;
+    // Free path: the overwhelming majority of stops belong to sessions with no goal.
+    if (!goal || goal.paused) return Response.json({});
+    if (goal.iterations >= GOAL_MAX_ITERATIONS) {
+      s.data.goal = undefined;
+      this.onGoalResolved(sessionId, false, goal);
+      return Response.json({});
+    }
+    let verdict: GoalVerdict;
+    try {
+      // shellEnv (token-optional): a missing credential surfaces as a failed judge → fail-open,
+      // not a thrown env build (the judge itself needs the token; the hook must not).
+      verdict = await this.goalJudge(goal.condition, s.recentTurns.join("\n"), this.shellEnv(s));
+    } catch {
+      return Response.json({}); // D6: fail open — never trap a session on an unreachable judge
+    }
+    if (verdict.met) {
+      s.data.goal = undefined;
+      this.onGoalResolved(sessionId, true, goal);
+      return Response.json({});
+    }
+    goal.iterations += 1;
+    goal.lastReason = verdict.reason;
+    this.persist();
+    this.broadcastUpdated(s.data);
+    this.broadcastLoops(); // each unmet attempt bumps the loop's live iteration count
+    return Response.json({ decision: "block", reason: `[${goal.condition}]: ${verdict.reason}` });
   }
 
   /** Answer a parked permission prompt (arch §6.6) — may come from any device. */

@@ -13,9 +13,8 @@
  * golden-pinned parser (cc/stream.ts) and the shared mapper (agent/map.ts); the flush() tail
  * is parsed too, so a CLI that dies mid-line still surfaces what it said.
  *
- * Permission brokering and daemon MCP tools join in Plans 4–5 — until then the CLI runs with
- * its own default permission engine ("default" mode: read-only tools work, mutating tools are
- * denied in -p mode).
+ * Permissions ride the daemon's MCP approve tool, role tool servers and the goal Stop hook
+ * ride the same per-spawn config (plans 4–5); config is fully CC-native (design §4.3).
  */
 import { tmpdir } from "node:os";
 import type { CommandInfo, ContentBlock, Model } from "@protocol";
@@ -54,9 +53,9 @@ export interface TurnRunnerDeps {
   ccCommand?: string[];
   /** CLI permission engine mode until Plans 4–5 wire the daemon broker. */
   permissionMode?: string;
-  /** Extra spawn args wiring the daemon's MCP approve endpoint (plan 4): called per spawn so a
-   *  freshly-rotated bearer lands in the .mcp.json the CLI reads. Absent ⇒ no permission bridge
-   *  (unit tests; CC's own engine denies mutating tools in -p default mode). */
+  /** Extra spawn args wiring the daemon's MCP endpoints (plans 4–5: approve tool, role tool
+   *  server, --allowedTools, goal Stop hook overlay): called per spawn so freshly-rotated
+   *  bearers and role changes land. Absent ⇒ no daemon bridge (unit tests). */
   permissionArgs?: () => string[];
   /** SIGINT → this grace → SIGKILL (design decision: 5s). */
   interruptGraceMs?: number;
@@ -145,11 +144,10 @@ export class TurnRunner implements SessionDriver {
       // The session's own mode, 1:1 with the CLI engine (protocol delta 1); re-read every spawn
       // so a mid-conversation session.set_permission_mode lands on the next turn.
       "--permission-mode", s.data.permissionMode ?? this.deps.permissionMode ?? "default",
-      // The daemon — not the host machine's ambient Claude config — is the authority (arch §6.6):
-      // no user/project settings (hooks/plugins), no ambient MCP servers. Mirrors the SDK path's
-      // settingSources: [] and keeps `init` the first stream line (plan-1 finding).
-      "--setting-sources", "",
-      "--strict-mcp-config",
+      // Fully CC-native config (design §4.3, cc plan 5): user/project settings, CLAUDE.md,
+      // skills, plugins, hooks, and the user's own MCP servers load exactly like terminal CC.
+      // NOTE: with host hooks configured, `init` is NOT necessarily the first stream line
+      // (plan-1 finding) — this runner never assumes it is.
       ...(this.deps.permissionArgs?.() ?? []),
       ...(this.systemPromptAppend() ? ["--append-system-prompt", this.systemPromptAppend()] : []),
       ...(s.data.claudeSessionId ? ["--resume", s.data.claudeSessionId] : []),

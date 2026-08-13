@@ -686,10 +686,15 @@ export function createServer(opts: ServerOptions): ServerHandle {
 
   // ── Frozen CC update API v1 (cc-cli-transport design §4.8; additive-only, breaking ⇒ /v2) ─────
   // GET status/check (observe), POST apply (download+smoke+flip, client polls status), POST rollback.
-  // The CC CLI's per-session MCP approve endpoint (cc plan 4, design §4.4). Bearer-gated inside
-  // the supervisor (per-session secret from the session's own .mcp.json) — deliberately NOT
-  // identity-gated: the caller is a local CLI process with no tailscale headers.
-  routeRe("POST", /^\/api\/cc\/mcp\/([^/]+)$/, (req, _url, m) => supervisor.ccMcpRequest(decodeURIComponent(m![1]!), req));
+  // The CC CLI's per-session MCP endpoints (cc plans 4–5): /api/cc/mcp/<id> = the anvild approve
+  // tool; /api/cc/mcp/<id>/<server> = the session's role tool server; /api/cc/hook/<id>/stop =
+  // the goal Stop hook callback. All bearer-gated inside the supervisor (per-session secret from
+  // the session's own .mcp.json/overlay) — deliberately NOT identity-gated: the caller is a local
+  // CLI process with no tailscale headers.
+  routeRe("POST", /^\/api\/cc\/mcp\/([^/]+)(?:\/([^/]+))?$/, (req, _url, m) =>
+    supervisor.ccMcpRequest(decodeURIComponent(m![1]!), req, m![2] ? decodeURIComponent(m![2]!) : undefined),
+  );
+  routeRe("POST", /^\/api\/cc\/hook\/([^/]+)\/stop$/, (req, _url, m) => supervisor.ccStopHook(decodeURIComponent(m![1]!), req));
 
   route("GET", "/api/cc/v1/status", () => Response.json({ ccApiVersion: CC_API_VERSION, ...ccUpdater.status() }));
   route("GET", "/api/cc/v1/check", async () => Response.json({ ccApiVersion: CC_API_VERSION, ...(await ccUpdater.check()) }));
