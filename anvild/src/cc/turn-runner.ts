@@ -59,6 +59,11 @@ export interface TurnRunnerDeps {
   permissionArgs?: () => string[];
   /** SIGINT → this grace → SIGKILL (design decision: 5s). */
   interruptGraceMs?: number;
+  /** Fired when a turn ends WITHOUT a result message (interrupt, crash, nonzero exit) — the
+   *  transcript on disk may hold more than the stream delivered; the supervisor runs the
+   *  reconciler here (cc plan 6 §4.9 "after any abnormal turn end"). Called before the next
+   *  queued prompt spawns, so backfill lands in order. */
+  onAbnormalEnd?: () => void;
 }
 
 interface QueuedPrompt {
@@ -196,6 +201,14 @@ export class TurnRunner implements SessionDriver {
       this.askQuestionIds.clear();
       this.pendingOffers.clear();
       this.state = "idle"; // `error` is per-turn (failTurn already reported it); the runner stays usable
+      if (!sawResult && !this.closed) {
+        // Abnormal end — disk may know more than the stream told us (design §4.9).
+        try {
+          this.deps.onAbnormalEnd?.();
+        } catch (e) {
+          console.error(`[cc ${s.id}] abnormal-end reconcile failed: ${e instanceof Error ? e.message : e}`);
+        }
+      }
       if (this.queue.length > 0 && !this.closed) {
         void this.runNext();
       } else if (s.data.status !== "idle") {

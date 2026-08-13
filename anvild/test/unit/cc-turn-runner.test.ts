@@ -271,3 +271,34 @@ test("tool turn: status derives running_tool → thinking → idle and tool even
   expect(statuses[statuses.length - 1]).toBe("idle");
   expect(statuses.indexOf("running_tool")).toBeLessThan(statuses.lastIndexOf("thinking"));
 });
+
+test("abnormal end (nonzero exit, no result) fires onAbnormalEnd; a clean turn does not", async () => {
+  // clean turn → no reconcile trigger
+  let cleanFired = 0;
+  const clean = fakeSession("sess_ae_clean");
+  const cleanRun = runner(clean.s, {}, { onAbnormalEnd: () => cleanFired++ });
+  cleanRun.tr.prompt("ok");
+  await until(() => cleanRun.results.length === 1);
+  await until(() => clean.data.status === "idle");
+  expect(cleanFired).toBe(0);
+
+  // crashed turn (exit 1, no result on stdout) → fires exactly once
+  let crashFired = 0;
+  const crash = fakeSession("sess_ae_crash");
+  const crashRun = runner(crash.s, { FAKE_CC_ERROR: "boom: transport exploded" }, { onAbnormalEnd: () => crashFired++ });
+  crashRun.tr.prompt("will crash");
+  await until(() => crashFired === 1);
+  expect(crashRun.results.length).toBe(0);
+});
+
+test("interrupt fires onAbnormalEnd (disk may know more than the stream)", async () => {
+  let fired = 0;
+  const { s, data } = fakeSession("sess_ae_int");
+  const { tr } = runner(s, { FAKE_CC_DELAY_MS: "50", FAKE_CC_HANG_AFTER: "6" }, { onAbnormalEnd: () => fired++ });
+  tr.prompt("will be interrupted");
+  await until(() => data.status === "thinking");
+  await new Promise((r) => setTimeout(r, 250));
+  await tr.interrupt();
+  await until(() => fired === 1);
+  await until(() => data.status === "idle");
+});

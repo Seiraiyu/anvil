@@ -105,6 +105,23 @@ test("identical prompts consume the text multiset one-for-one", () => {
   expect(again.emitted).toEqual([]);
 });
 
+test("legacy guard: uncorrelated assistant history blocks reconcile (pre-plan-6 logs)", () => {
+  // A log written before ccUuid stamping: assistant content with no correlation at all.
+  const legacyLog: SessionEventBody[] = [
+    daemonPrompt(PROMPT_A),
+    { type: "assistant.message", blocks: [] } as unknown as SessionEventBody,
+  ];
+  const { emitted, outcome } = run(FIXTURE, legacyLog);
+  expect(emitted).toEqual([]);
+  expect(outcome.backfilled).toBe(0);
+  expect(outcome.warns.join(" ")).toContain("pre-plan-6");
+
+  // …but a log whose only content is user prompts (turn died before any assistant event)
+  // is safe to heal — nothing assistant-shaped to duplicate.
+  const promptOnly = run(FIXTURE, [daemonPrompt(PROMPT_A)]);
+  expect(promptOnly.outcome.backfilled).toBeGreaterThan(0);
+});
+
 test("meta/sidechain/CLI-internal lines never backfill", () => {
   const dir = mkdtempSync(join(tmpdir(), "anvil-reconcile-"));
   const file = join(dir, "t.jsonl");

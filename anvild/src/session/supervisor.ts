@@ -63,6 +63,8 @@ import { FileWatchManager } from "./file-watch-manager";
 import { createWorktree, gitStatus, gitStatusAsync, recreateWorktree, removeWorktree, worktreeHealth } from "./worktree";
 import { AgentDriver, type TurnUsage } from "../agent/driver";
 import { TurnRunner, type SessionDriver } from "../cc/turn-runner";
+import { reconcileTranscript } from "../cc/reconcile";
+import { transcriptPath } from "../cc/transcript";
 import { CcMcpConfig, CC_PERMISSION_TOOL } from "../cc/mcp-config";
 import { handleCcMcp } from "../cc/permission-server";
 import { handleToolServer, type AnvilToolServer } from "../cc/tool-host";
@@ -1390,6 +1392,34 @@ export class Supervisor {
     void err;
   }
 
+  /** Heal one session's event log from its on-disk CC transcript (cc plan 6, design §4.9 —
+   *  "disk is truth"). Idempotent and dedupe-guarded (ccUuid + prompt-text matching, plus the
+   *  pre-plan-6 legacy guard), so calling it on boot, after an abnormal turn end, or after a
+   *  PTY detach is always safe. Best-effort: a reconcile failure never takes the session down. */
+  reconcileFromTranscript(id: string, reason: string): number {
+    const s = this.sessions.get(id);
+    const log = this.logs.get(id);
+    const claudeSessionId = s?.data.claudeSessionId;
+    if (!s || s.isDisposed || !log || !claudeSessionId) return 0;
+    try {
+      const r = reconcileTranscript(transcriptPath(s.data.cwd, claudeSessionId), {
+        renderer: this.renderer,
+        events: () => log.since(0),
+        emit: (b) => s.emit(b),
+      });
+      for (const w of r.warns) console.warn(`[reconcile ${id}] ${w}`);
+      if (r.backfilled > 0) {
+        console.log(`[reconcile ${id}] backfilled ${r.backfilled} event(s) from transcript (${reason})`);
+        this.persist();
+        this.broadcastUpdated(s.data);
+      }
+      return r.backfilled;
+    } catch (e) {
+      console.error(`[reconcile ${id}] failed (${reason}): ${e instanceof Error ? e.message : e}`);
+      return 0;
+    }
+  }
+
   /** Get the session's live driver, creating it lazily on first use (arch §6.2). */
   private ensureDriver(id: string): SessionDriver {
     let driver = this.drivers.get(id);
@@ -1406,6 +1436,9 @@ export class Supervisor {
           onResult: (usage) => this.onAgentResult(id, usage),
           onCommands: (commands) => this.onSessionCommands(id, commands),
           onTurnError: (err) => this.onTurnError(err),
+          // Disk is truth (cc plan 6 §4.9): a turn that ended without a result may have
+          // landed more in the transcript than the stream delivered — heal immediately.
+          onAbnormalEnd: () => this.reconcileFromTranscript(id, "abnormal turn end"),
           // The daemon's approve tool answers everything CC's engine would prompt for — including
           // AskUserQuestion (spike finding c) — and the session's role tool server + the goal
           // Stop hook ride the same per-spawn config, so bearer rotations and role changes land.
@@ -2118,6 +2151,11 @@ export class Supervisor {
         // daemon restart; a pre-v4 row has none → wrap mints one (forces one harmless full snapshot).
         const session = this.wrap(p.data, p.lastSeq, p.epoch);
         this.sessions.set(p.data.id, session);
+
+        // Crash-heal (cc plan 6 §4.9): the transcript on disk survived the crash even when the
+        // daemon's stream consumption didn't — backfill BEFORE the interrupted-turn notice so the
+        // healed history reads in order. Synchronous file reads, guarded per session.
+        this.reconcileFromTranscript(p.data.id, "daemon boot");
 
         if (interrupted) {
           session.emit({

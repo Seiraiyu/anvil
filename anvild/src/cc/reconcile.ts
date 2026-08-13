@@ -74,6 +74,7 @@ export function reconcileTranscript(transcriptFile: string, deps: ReconcileDeps)
   // (un-correlated) message.user events for prompt matching.
   const known = new Set<string>();
   const daemonPrompts = new Map<string, number>();
+  let uncorrelatedContent = false;
   for (const e of deps.events()) {
     const ccUuid = (e as { ccUuid?: unknown }).ccUuid;
     if (typeof ccUuid === "string") {
@@ -81,7 +82,20 @@ export function reconcileTranscript(transcriptFile: string, deps: ReconcileDeps)
     } else if (e.type === "message.user") {
       const source = (e as { rendered?: { source?: unknown } }).rendered?.source;
       if (typeof source === "string") daemonPrompts.set(source, (daemonPrompts.get(source) ?? 0) + 1);
+    } else if (e.type === "assistant.message" || e.type === "tool.use" || e.type === "tool.result") {
+      uncorrelatedContent = true;
     }
+  }
+
+  // Legacy guard: a log that holds assistant/tool history with ZERO ccUuid correlation predates
+  // plan 6's stamping — assistant lines can't be deduped, so a reconcile would duplicate the whole
+  // conversation. Skip; the session becomes heal-able after its next live turn stamps events.
+  if (known.size === 0 && uncorrelatedContent) {
+    return {
+      backfilled: 0,
+      scanned: 0,
+      warns: [...warns, "event log holds assistant history without ccUuid correlation (pre-plan-6); reconcile skipped to avoid duplication"],
+    };
   }
 
   let backfilled = 0;
