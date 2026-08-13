@@ -1421,16 +1421,10 @@ export class Supervisor {
         this.questionBroker,
         this.agentEnv(s),
         (usage) => this.onAgentResult(id, usage),
-        isDefault
-          ? { [DEFAULT_MCP_SERVER_NAME]: this.defaultToolsServer }
-          : isLead
-            ? { [TEAM_MCP_SERVER_NAME]: this.teams.buildTeamServer(id) }
-            : isMember
-              ? { [MEMBER_MCP_SERVER_NAME]: this.teams.buildMemberServer(id) }
-              : isPlanner
-                ? { [PLANNING_MCP_SERVER_NAME]: this.autopilot.buildPlanningServer(id) }
-                : undefined,
-        isDefault ? DEFAULT_TOOL_IDS : isLead ? TEAM_TOOL_IDS : isMember ? MEMBER_TOOL_IDS : isPlanner ? PLANNING_TOOL_IDS : undefined,
+        // cc plan 5: the anvil tool servers are daemon-hosted MCP now (ccSessionArgs wires them
+        // for the CLI transport). The legacy SDK path runs without them until Plan 8 deletes it.
+        undefined,
+        undefined,
         this.planReviewer(s),
         undefined, // queryFn — keep the SDK default
         skillPlugins({ cwd: s.data.cwd, sessionId: id, stateDir: this.stateDir }),

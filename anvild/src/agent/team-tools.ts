@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createSdkMcpServer, tool, type McpSdkServerConfigWithInstance, type SdkMcpToolDefinition } from "@anthropic-ai/claude-agent-sdk";
+import { defineTool, type AnvilTool, type AnvilToolServer } from "../cc/tool-host";
 import type { TeamInfo, TeamPlanMember } from "@protocol";
 
 /**
@@ -59,14 +59,14 @@ const memberSchema = z.object({
     .describe("Titles of members that must integrate BEFORE this one (used to order the merge)."),
 });
 
-export function buildTeamToolsServer(deps: TeamToolDeps): McpSdkServerConfigWithInstance {
-  return createSdkMcpServer({ name: TEAM_MCP_SERVER_NAME, version: "1.0.0", tools: teamTools(deps) });
+export function buildTeamToolsServer(deps: TeamToolDeps): AnvilToolServer {
+  return { name: TEAM_MCP_SERVER_NAME, tools: teamTools(deps) };
 }
 
 /** The lead tool definitions (exported so tests can invoke handlers without a live SDK server). */
-export function teamTools(deps: TeamToolDeps): SdkMcpToolDefinition<any>[] {
+export function teamTools(deps: TeamToolDeps): AnvilTool[] {
   return [
-      tool(
+      defineTool(
         "propose_team_plan",
         "Propose how to split the goal into parallel member sessions. Each member gets its own task " +
           "and (usually) its own git worktree branched off yours. This proposal is GATED: at 'bypass' " +
@@ -88,7 +88,7 @@ export function teamTools(deps: TeamToolDeps): SdkMcpToolDefinition<any>[] {
           }
         },
       ),
-      tool(
+      defineTool(
         "create_member",
         "Directly spawn ONE member session that starts working immediately on its brief. Use this to " +
           "hand-build a team or add a member outside the plan flow. The member branches off your " +
@@ -118,14 +118,14 @@ export function teamTools(deps: TeamToolDeps): SdkMcpToolDefinition<any>[] {
           }
         },
       ),
-      tool(
+      defineTool(
         "list_members",
         "List your team's members with their live status and git state (branch, dirty, ahead, PR). " +
           "Use this to check progress before integrating.",
         {},
         async () => ok(JSON.stringify(deps.listMembers(), null, 2)),
       ),
-      tool(
+      defineTool(
         "integrate",
         "Bring the members' work home per the team policy. combined-pr: merge each member branch into " +
           "yours in dependency order, then open one PR. pr-per-member: no merge (each member PRs its own). " +
@@ -139,7 +139,7 @@ export function teamTools(deps: TeamToolDeps): SdkMcpToolDefinition<any>[] {
           }
         },
       ),
-      tool(
+      defineTool(
         "dismiss_member",
         "Tear a member down when its work is done or unwanted: stops the member and removes its worktree, " +
           "branch, and state. Only members of YOUR team can be dismissed. Use after integrate, or to drop a " +
@@ -153,7 +153,7 @@ export function teamTools(deps: TeamToolDeps): SdkMcpToolDefinition<any>[] {
           }
         },
       ),
-      tool(
+      defineTool(
         "message_member",
         "Send a steering message to one of YOUR members — a course correction, extra context, a new " +
           "constraint, or an answer to something it's waiting on. The message is queued for the member's " +
