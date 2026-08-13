@@ -76,7 +76,9 @@ function fmtTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }
 
-function resolveCcCommand(env: Record<string, string | undefined>): string[] {
+/** The CC binary vector: the plan-2 managed-install bridge (ANVIL_CLI_PATH) or PATH's `claude`.
+ *  Shared with the supervisor's attach flow (plan 6), which spawns the same binary in a PTY. */
+export function resolveCcCommand(env: Record<string, string | undefined>): string[] {
   const cli = env.ANVIL_CLI_PATH?.trim();
   return cli ? [cli] : ["claude"];
 }

@@ -286,6 +286,10 @@ export interface Session {
   // before execution (the autopilot adversarial panel, brought to interactive sessions). Advisory only;
   // needs an OpenRouter key. Default off. (§6.6 / adversarial panel)
   claudeSessionId?: string; // Claude Code's own --resume id
+  /** A real terminal owns the conversation right now (cc plan 6 attach, additive v5): the attach
+   *  PTY is running `claude --resume`; headless prompts are rejected until detach. Runtime-only —
+   *  cleared on daemon restart (the PTY died with the process). */
+  attached?: boolean;
   status: SessionStatus;
   createdAt: Iso8601;
   lastActivityAt: Iso8601;
@@ -1569,6 +1573,28 @@ export interface TerminalCloseCmd extends Envelope, Correlated {
   termId?: string; // multi-terminal (design 2026-08-08); absent = "1", the pre-multi-term default
 }
 
+// 5d². Terminal attach to the CC conversation (cc plan 6, design §4.9)
+
+/** Attach the session's REAL Claude Code conversation to a PTY: spawns `claude --resume <id>`
+ *  in a dedicated terminal (termId `CC_ATTACH_TERM_ID`, rides the normal terminal.* channel and
+ *  chip roster). Only from `idle` with no parked prompt cards; while attached, `prompt.send` is
+ *  rejected — the terminal owns the conversation. Additive (v5). */
+export interface CcAttachCmd extends Envelope, Correlated {
+  type: "cc.attach";
+  sessionId: SessionId;
+  cols: number;
+  rows: number;
+}
+/** End the terminal takeover: kills the attach PTY, reconciles the transcript back into the
+ *  event log (turns typed in the terminal appear in every client's history), returns the
+ *  session to `idle`. Also implied by the PTY exiting on its own (user quit CC). */
+export interface CcDetachCmd extends Envelope, Correlated {
+  type: "cc.detach";
+  sessionId: SessionId;
+}
+/** The reserved termId of the attach PTY (never a plain shell). */
+export const CC_ATTACH_TERM_ID = "cc";
+
 // 5e. Notifications (§6.7)
 
 export interface PushRegisterCmd extends Envelope, Correlated {
@@ -1674,6 +1700,8 @@ export type ClientCommand =
   | DaemonUpdateCmd
   // terminal
   | TerminalOpenCmd
+  | CcAttachCmd
+  | CcDetachCmd
   | TerminalInputCmd
   | TerminalResizeCmd
   | TerminalCloseCmd

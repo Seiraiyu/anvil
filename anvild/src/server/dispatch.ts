@@ -487,6 +487,16 @@ export function dispatch(conn: ConnState, raw: string, send: Send, deps: Dispatc
         deps.supervisor.terminalOpen(cmd.sessionId, cmd.cols, cmd.rows, cmd.termId);
         if (cid) send(ack(cid));
         return;
+      case "cc.attach":
+        // Terminal takeover (cc plan 6 §4.9): spawn `claude --resume` in the attach PTY; the
+        // client then views it via terminal.open on the reserved "cc" termId.
+        deps.supervisor.ccAttach(cmd.sessionId, cmd.cols, cmd.rows);
+        if (cid) send(ack(cid));
+        return;
+      case "cc.detach":
+        deps.supervisor.ccDetach(cmd.sessionId);
+        if (cid) send(ack(cid));
+        return;
       case "terminal.input":
         deps.supervisor.terminalInput(cmd.sessionId, cmd.data, cmd.termId);
         return;

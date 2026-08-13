@@ -28,34 +28,41 @@ export type SpawnTerminal = (opts: {
   cwd: string;
   env: Record<string, string>;
   onData: (bytes: Uint8Array) => void;
+  /** Run this argv instead of the login shell (cc plan 6 attach: `claude --resume <id>`). */
+  command?: string[];
 }) => TerminalHandle;
 
 const SCROLLBACK_CAP = 262_144; // 256KB retained per session
 
-/** Wrap the shell so it starts as a session leader with the PTY slave as its controlling TTY.
+/** Wrap an argv so it starts as a session leader with the PTY slave as its controlling TTY.
  *  Bun.spawn({terminal}) attaches the PTY as stdio only — without a ctty the line discipline has
  *  no foreground process group, so ^C's SIGINT is delivered to nobody ("bash: no job control in
  *  this shell"; zsh degrades silently). Verified live on both fleet hosts (design 2026-08-08). */
-export function cttyArgv(platform: string, shell: string): string[] {
-  if (platform === "linux") return ["setsid", "--ctty", "--wait", shell];
-  if (platform === "darwin") return ["script", "-q", "/dev/null", shell];
-  return [shell];
+export function cttyWrap(platform: string, argv: string[]): string[] {
+  if (platform === "linux") return ["setsid", "--ctty", "--wait", ...argv];
+  if (platform === "darwin") return ["script", "-q", "/dev/null", ...argv];
+  return argv;
 }
 
-/** The real PTY factory: Bun.Terminal + a shell spawned onto it. */
-const defaultSpawnTerminal: SpawnTerminal = ({ cols, rows, cwd, env, onData }) => {
+/** cttyWrap for the single-binary case (the login shell). */
+export function cttyArgv(platform: string, shell: string): string[] {
+  return cttyWrap(platform, [shell]);
+}
+
+/** The real PTY factory: Bun.Terminal + the command (default: login shell) spawned onto it. */
+const defaultSpawnTerminal: SpawnTerminal = ({ cols, rows, cwd, env, onData, command }) => {
   const BunAny = Bun as unknown as {
     Terminal: new (o: { cols: number; rows: number; data: (t: unknown, b: Uint8Array) => void }) => TerminalPty;
     spawn: (cmd: string[], o: { terminal: TerminalPty; cwd: string; env: Record<string, string> }) => { exited: Promise<number | null> };
   };
   const term = new BunAny.Terminal({ cols, rows, data: (_t, bytes) => onData(bytes) });
-  const shell = process.env.SHELL || "/bin/zsh";
+  const argv = command ?? [process.env.SHELL || "/bin/zsh"];
   let proc: { exited: Promise<number | null> };
   try {
-    proc = BunAny.spawn(cttyArgv(process.platform, shell), { terminal: term, cwd, env });
+    proc = BunAny.spawn(cttyWrap(process.platform, argv), { terminal: term, cwd, env });
   } catch {
     // setsid/script binary missing — degrade to the ctty-less spawn (terminal works, no job control)
-    proc = BunAny.spawn([shell], { terminal: term, cwd, env });
+    proc = BunAny.spawn(argv, { terminal: term, cwd, env });
   }
   return { pty: term, proc };
 };
@@ -65,7 +72,7 @@ export const DEFAULT_TERM_ID = "1"; // what an absent wire termId means (pre-mul
 
 export class TerminalManager {
   /** sessionId → termId → live PTY record. */
-  private readonly terminals = new Map<string, Map<string, { pty: TerminalPty; scrollback: Buffer }>>();
+  private readonly terminals = new Map<string, Map<string, { pty: TerminalPty; scrollback: Buffer; title: string }>>();
   private readonly shellTitle = (process.env.SHELL || "/bin/zsh").split("/").pop() || "shell";
 
   constructor(
@@ -82,14 +89,31 @@ export class TerminalManager {
   roster(sessionId: string): { id: string; title: string }[] {
     const terms = this.terminals.get(sessionId);
     if (!terms) return [];
-    return [...terms.keys()].sort((a, b) => Number(a) - Number(b)).map((id) => ({ id, title: this.shellTitle }));
+    // numeric ids in order, then named ones (the "cc" attach terminal) last
+    const key = (id: string) => (Number.isFinite(Number(id)) ? Number(id) : Number.MAX_SAFE_INTEGER);
+    return [...terms.entries()]
+      .sort(([a], [b]) => key(a) - key(b) || a.localeCompare(b))
+      .map(([id, t]) => ({ id, title: t.title }));
   }
 
   has(sessionId: string, termId: string = DEFAULT_TERM_ID): boolean {
     return this.terminals.get(sessionId)?.has(termId) ?? false;
   }
 
-  open(sessionId: string, cols: number, rows: number, termId: string = DEFAULT_TERM_ID): void {
+  open(
+    sessionId: string,
+    cols: number,
+    rows: number,
+    termId: string = DEFAULT_TERM_ID,
+    opts: {
+      /** Run this argv instead of the login shell (cc plan 6: the attach PTY's `claude --resume`). */
+      command?: string[];
+      /** Chip title; defaults to the shell (or the command's basename). */
+      title?: string;
+      /** Fired once when the PTY's process exits, after the roster update (attach lifecycle hook). */
+      onExit?: (code: number) => void;
+    } = {},
+  ): void {
     const s = this.resolve(sessionId);
     let terms = this.terminals.get(sessionId);
     const existing = terms?.get(termId);
@@ -107,12 +131,14 @@ export class TerminalManager {
       terms = new Map();
       this.terminals.set(sessionId, terms);
     }
-    const rec: { pty: TerminalPty; scrollback: Buffer } = { pty: null as unknown as TerminalPty, scrollback: Buffer.alloc(0) };
+    const title = opts.title ?? (opts.command ? (opts.command[0] ?? "").split("/").pop() || "cmd" : this.shellTitle);
+    const rec: { pty: TerminalPty; scrollback: Buffer; title: string } = { pty: null as unknown as TerminalPty, scrollback: Buffer.alloc(0), title };
     const handle = this.spawn({
       cols,
       rows,
       cwd: s.cwd,
       env: { ...this.agentEnv(sessionId), TERM: "xterm-256color" }, // TERM is a terminal concern, set here
+      command: opts.command,
       onData: (bytes) => {
         const buf = Buffer.from(bytes);
         rec.scrollback = Buffer.concat([rec.scrollback, buf]);
@@ -126,6 +152,7 @@ export class TerminalManager {
       s.emit({ type: "terminal.exit", code: code ?? 0, termId });
       this.drop(sessionId, termId);
       this.onRoster(sessionId, this.roster(sessionId));
+      opts.onExit?.(code ?? 0);
     });
     this.onRoster(sessionId, this.roster(sessionId));
   }

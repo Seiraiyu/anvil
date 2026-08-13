@@ -40,6 +40,8 @@
     "autopilot.tags.reset",
     "autopilot.trigger",
     "budget",
+    "cc.attach",
+    "cc.detach",
     "command.error",
     "conversation.snapshot",
     "daemon.update",

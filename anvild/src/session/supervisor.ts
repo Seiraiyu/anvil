@@ -39,6 +39,7 @@ import {
   type GitResultEvent,
   isModel,
   isPermissionMode,
+  CC_ATTACH_TERM_ID,
   type Model,
   type PermissionDecision,
   type QuestionAnswer,
@@ -58,11 +59,11 @@ import type { ConnectionRegistry } from "../server/registry";
 import { discoverSelfBaseUrl } from "../server/fleet";
 import { Session } from "./session";
 import { SessionStore } from "./store";
-import { TerminalManager } from "./terminal-manager";
+import { TerminalManager, type SpawnTerminal } from "./terminal-manager";
 import { FileWatchManager } from "./file-watch-manager";
 import { createWorktree, gitStatus, gitStatusAsync, recreateWorktree, removeWorktree, worktreeHealth } from "./worktree";
 import { AgentDriver, type TurnUsage } from "../agent/driver";
-import { TurnRunner, type SessionDriver } from "../cc/turn-runner";
+import { TurnRunner, resolveCcCommand, type SessionDriver } from "../cc/turn-runner";
 import { reconcileTranscript } from "../cc/reconcile";
 import { transcriptPath } from "../cc/transcript";
 import { CcMcpConfig, CC_PERMISSION_TOOL } from "../cc/mcp-config";
@@ -163,6 +164,8 @@ export interface SupervisorConfig {
   adversarialModels?: string[];
   /** Preferred OpenRouter provider slug for the panel (see `Config.adversarialProvider`). */
   adversarialProvider?: string;
+  /** Test-only PTY factory override (the real one spawns Bun.Terminal + a shell / `claude --resume`). */
+  spawnTerminal?: SpawnTerminal;
 }
 
 /**
@@ -273,6 +276,7 @@ export class Supervisor {
       provider: cfg.adversarialProvider,
     };
     this.stateDir = cfg.stateDir;
+    this.terminalMgr = this.buildTerminalManager(cfg.spawnTerminal);
     this.accounts = cfg.accounts ?? new AccountStore(cfg.stateDir);
     this.pairedHub = cfg.pairedHub;
     this.onRosterChanged = cfg.onRosterChanged;
@@ -1271,24 +1275,79 @@ export class Supervisor {
 
   // Terminal channel (arch §7): a persistent PTY per session via Bun.Terminal. Extracted to
   // TerminalManager (unit-tested); the Supervisor just adapts a session id to {cwd, emit}.
-  private readonly terminalMgr = new TerminalManager(
-    (sessionId) => {
-      const s = this.require(sessionId);
-      return { cwd: s.data.cwd, emit: (body) => s.emit(body) };
-    },
-    (sessionId) => this.shellEnv(this.sessions.get(sessionId)),
-    (sessionId, terminals) => {
-      // The roster rides the Session (additive `terminals`, design 2026-08-08) so every device's
-      // chip strip stays live. Runtime-only: restore() clears it — PTYs die with the process.
-      const s = this.sessions.get(sessionId);
-      if (!s) return; // roster change raced a session kill
-      s.data.terminals = terminals.length ? terminals : undefined;
-      this.broadcastUpdated(s.data);
-    },
-  );
+  // Constructed in the constructor (not a field initializer) so tests can inject cfg.spawnTerminal.
+  private readonly terminalMgr: TerminalManager;
+
+  private buildTerminalManager(spawn?: SpawnTerminal): TerminalManager {
+    return new TerminalManager(
+      (sessionId) => {
+        const s = this.require(sessionId);
+        return { cwd: s.data.cwd, emit: (body) => s.emit(body) };
+      },
+      (sessionId) => this.shellEnv(this.sessions.get(sessionId)),
+      (sessionId, terminals) => {
+        // The roster rides the Session (additive `terminals`, design 2026-08-08) so every device's
+        // chip strip stays live. Runtime-only: restore() clears it — PTYs die with the process.
+        const s = this.sessions.get(sessionId);
+        if (!s) return; // roster change raced a session kill
+        s.data.terminals = terminals.length ? terminals : undefined;
+        this.broadcastUpdated(s.data);
+      },
+      ...(spawn ? [spawn] : []),
+    );
+  }
 
   terminalOpen(sessionId: string, cols: number, rows: number, termId?: string): void {
+    // The attach PTY's id is reserved: terminal.open on it REPLAYS an existing attach (scrollback)
+    // but never spawns a plain shell there — that chip must always be `claude --resume`.
+    if (termId === CC_ATTACH_TERM_ID && !this.terminalMgr.has(sessionId, CC_ATTACH_TERM_ID)) {
+      throw new BadCommand("no attached terminal — use Attach first");
+    }
     this.terminalMgr.open(sessionId, cols, rows, termId);
+  }
+
+  /** Attach the session's CC conversation to a real terminal (cc plan 6, design §4.9): only from
+   *  `idle` with nothing parked; spawns `claude --resume <id>` in a dedicated PTY and blocks
+   *  headless prompts until detach. The PTY rides the normal terminal channel (chip "cc"). */
+  ccAttach(id: string, cols: number, rows: number): void {
+    const s = this.require(id);
+    if (s.data.attached) throw new BadCommand("this session is already attached to a terminal");
+    const claudeSessionId = s.data.claudeSessionId;
+    if (!claudeSessionId) throw new BadCommand("nothing to attach yet — send a prompt first so a Claude Code conversation exists");
+    // Only from idle (design §7): a live turn, or a parked permission/question card, owns the
+    // conversation. (Kill-during-awaiting force-resolves cards first — plan 4 task 8 semantics.)
+    if (s.data.status !== "idle" || s.hasPendingPermission() || s.hasPendingQuestion()) {
+      throw new BadCommand(`can't attach while the session is ${s.data.status} — wait for idle (or interrupt first)`);
+    }
+    const driver = this.drivers.get(id);
+    if (driver instanceof TurnRunner && driver.turnState !== "idle" && driver.turnState !== "error") {
+      throw new BadCommand("can't attach while a turn is in flight — interrupt it first");
+    }
+    s.data.attached = true;
+    this.terminalMgr.open(id, cols, rows, CC_ATTACH_TERM_ID, {
+      command: [...resolveCcCommand(process.env), "--resume", claudeSessionId],
+      title: "claude",
+      // User quit CC in the terminal (or the PTY died): that IS a detach — reconcile + release.
+      onExit: () => this.ccDetach(id, "terminal exited"),
+    });
+    this.broadcastUpdated(s.data);
+    console.log(`[cc ${id}] attached: claude --resume ${claudeSessionId} in PTY`);
+  }
+
+  /** End a terminal attach (explicit command, PTY exit, or session teardown): kill the PTY,
+   *  backfill the TUI turns from the transcript, release the prompt gate. Idempotent. */
+  ccDetach(id: string, reason = "detach requested"): void {
+    const s = this.sessions.get(id);
+    if (!s || !s.data.attached) return;
+    s.data.attached = false;
+    this.terminalMgr.closeOne(id, CC_ATTACH_TERM_ID); // no-op when the PTY already exited
+    // Disk is truth: whatever was typed in the terminal is in the transcript — project it into
+    // every client's history. (The TUI may also have COMPACTED or /clear-ed; uuids keep us safe.)
+    this.reconcileFromTranscript(id, `pty detach (${reason})`);
+    if (s.data.status !== "idle") s.setStatus("idle");
+    this.persist();
+    this.broadcastUpdated(s.data);
+    console.log(`[cc ${id}] detached (${reason})`);
   }
   terminalInput(sessionId: string, dataBase64: string, termId?: string): void {
     this.terminalMgr.input(sessionId, dataBase64, termId);
@@ -1316,6 +1375,10 @@ export class Supervisor {
     // Exactly-once (v4, spec A5): a re-flushed offline send carries the same cid. If we've already
     // applied it, record nothing new and don't run the turn again — the dispatcher re-acks it.
     if (cid && s.isPromptApplied(cid)) return;
+    // Attached gate (cc plan 6 §4.9): while a real terminal owns the conversation, a headless
+    // turn would fork CC's session state under the TUI's feet. Deliberately BEFORE the cid is
+    // recorded — the same send, re-flushed after detach, should run.
+    if (s.data.attached) throw new BadCommand("this session is attached to a terminal — detach it to chat from here");
     if (s.data.archived) {
       s.data.archived = false; // prompting reactivates an archived session
       this.broadcastUpdated(s.data);
@@ -2144,6 +2207,7 @@ export class Supervisor {
         const interrupted = transient.includes(p.data.status);
         if (interrupted) p.data.status = "idle";
         p.data.terminals = undefined; // terminal roster is runtime state — the PTYs died with the old process
+        p.data.attached = undefined; // ditto the attach PTY (cc plan 6) — boot reconcile below heals its turns
         // A restored goal is re-armed PAUSED (design D5): a self-update must never resume an
         // unattended loop. The next user prompt un-pauses it (see prompt()).
         if (p.data.goal) p.data.goal.paused = true;
