@@ -27,6 +27,9 @@ import { Supervisor } from "../session/supervisor";
 import { UpdateStateStore } from "../daemon/update-state";
 import { updateApply, updateCheck, updateStatus, settleAfterBoot, type UpdateApiDeps } from "../daemon/update-api";
 import { isManaged, scheduleRestart, webBundleOk } from "../daemon/selfupdate";
+import { CcInstalls, officialDownloader, resolveLatestVersion } from "../cc/install";
+import { smokeTest } from "../cc/smoke";
+import { CcUpdater, CC_API_VERSION } from "../cc/update";
 import { FleetRolloutCoordinator, DesiredTargetStore, httpMemberUpdateClient } from "./fleet-rollout";
 import { FleetJobs } from "./fleet-jobs";
 import { resolveTargetSha } from "../daemon/selfupdate";
@@ -184,6 +187,11 @@ export interface ServerOptions {
   /** [BE2-15] Test-only override of the caller-identity resolver (the real one shells out to the
    *  tailscale CLI, which makes identity-gated routes untestable hermetically). */
   resolveIdentity?: () => Promise<{ trust: PeerTrust; reject?: string }>;
+  /** Root of the managed CC install tree (see `Config.ccDir`). Defaults to `<stateDir>/cc`. */
+  ccDir?: string;
+  /** Test-only injection of a fully-faked CC updater so /api/cc/v1/* is testable without the
+   *  network or a real claude binary (same convention as fleetNet/resolveIdentity). */
+  ccUpdater?: CcUpdater;
 }
 
 /** The fleet fan-out network surface the rotate/invite paths reach the tailnet through ([BE2-15]). */
@@ -248,6 +256,18 @@ export function createServer(opts: ServerOptions): ServerHandle {
   const updateState = new UpdateStateStore(opts.stateDir);
   const updateDeps: UpdateApiDeps = { state: updateState, webDir: WEB_DIR, isManaged, scheduleRestart };
   settleAfterBoot(updateDeps);
+
+  // Managed CC installs (cc-cli-transport design §4.8): versioned store under ccDir, smoke-gated
+  // updates, one-tap rollback. Real deps by default; tests inject `opts.ccUpdater`.
+  const ccUpdater =
+    opts.ccUpdater ??
+    new CcUpdater({
+      installs: new CcInstalls(opts.ccDir ?? join(opts.stateDir, "cc")),
+      download: officialDownloader(),
+      smoke: smokeTest,
+      resolveLatest: () => resolveLatestVersion(),
+      stateFile: join(opts.stateDir, "cc-update-state.json"),
+    });
 
   // Hub-orchestrated fleet rollout (spec §4.4): pins one SHA, fans it out to reachable members over the
   // frozen API, updates the hub itself last. The desired target persists so a member that was offline is
@@ -667,6 +687,36 @@ export function createServer(opts: ServerOptions): ServerHandle {
     return Response.json(result, { status: result.ok ? 200 : 500 });
   });
   route("GET", "/api/update/v1/status", () => Response.json(updateStatus(updateDeps)));
+
+  // ── Frozen CC update API v1 (cc-cli-transport design §4.8; additive-only, breaking ⇒ /v2) ─────
+  // GET status/check (observe), POST apply (download+smoke+flip, client polls status), POST rollback.
+  route("GET", "/api/cc/v1/status", () => Response.json({ ccApiVersion: CC_API_VERSION, ...ccUpdater.status() }));
+  route("GET", "/api/cc/v1/check", async () => Response.json({ ccApiVersion: CC_API_VERSION, ...(await ccUpdater.check()) }));
+  route("POST", "/api/cc/v1/apply", async (req, _url, _m, ctx) => {
+    // [SEC2-2]/[SEC2-3] parity with /api/update/v1/apply: JSON content-type kills no-cors
+    // drive-bys; a proven different tailnet user may not push a binary flip onto this member.
+    const ct = (req.headers.get("content-type") || "").toLowerCase();
+    if (!ct.includes("application/json")) return new Response("application/json required", { status: 415 });
+    const who = await ctx.callerIdentity();
+    if (who.trust === "otherUser" && !ctx.localNoIdentityCaller) return Response.json({ error: who.reject ?? "different tailnet user" }, { status: 403 });
+    const body = (await jsonBody<{ target?: string }>(req)) ?? {};
+    // Kick and return immediately — the flow's outcome lands in the state file; clients poll
+    // /status (fleet precedent, design delta 4). apply() itself never rejects (error phase).
+    void ccUpdater.apply(body.target);
+    return Response.json({ ccApiVersion: CC_API_VERSION, ...ccUpdater.status() });
+  });
+  route("POST", "/api/cc/v1/rollback", async (req, _url, _m, ctx) => {
+    const ct = (req.headers.get("content-type") || "").toLowerCase();
+    if (!ct.includes("application/json")) return new Response("application/json required", { status: 415 });
+    const who = await ctx.callerIdentity();
+    if (who.trust === "otherUser" && !ctx.localNoIdentityCaller) return Response.json({ error: who.reject ?? "different tailnet user" }, { status: 403 });
+    try {
+      ccUpdater.rollback();
+    } catch (e) {
+      return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 409 });
+    }
+    return Response.json({ ccApiVersion: CC_API_VERSION, ...ccUpdater.status() });
+  });
 
   // Fleet discovery (anvil-multi-server.md §4.1): enumerate Tailscale peers + probe each
   // /api/health, return the Anvil daemons found (deduped by serverId) as add-suggestions.

@@ -96,6 +96,9 @@ export const SERVER_CAPABILITIES: readonly string[] = [
   // the `updateApiVersion` field) to drive a member through the stable path vs the legacy daemon.update
   // (stable-update-service spec §4.3).
   "stable-update",
+  // Managed Claude Code installs (/api/cc/v1/*): versioned store + smoke-gated update + rollback
+  // (cc-cli-transport design §4.8). Clients gate the CC version card on this.
+  "cc-update",
 ];
 
 /** This daemon's position in the fleet, as `serverHelloEvent` needs it to derive `role`. */

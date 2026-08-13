@@ -59,6 +59,7 @@ const server = ((): ReturnType<typeof createServer> => {
       port: config.port,
       stateDir: config.stateDir,
       clonesDir: config.clonesDir,
+      ccDir: config.ccDir,
       warnFraction: config.warnFraction,
       softStopFraction: config.softStopFraction,
       adversarialModels: config.adversarialModels,
