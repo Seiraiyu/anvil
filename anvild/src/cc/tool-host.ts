@@ -1,6 +1,6 @@
 /**
- * Daemon-hosted MCP tool server (plan 5 task 1, design §4.5) — replaces the SDK's
- * createSdkMcpServer for the anvil role tool sets (concierge/team/member/planning). Speaks the
+ * Daemon-hosted MCP tool server (plan 5 task 1, design §4.5) — replaces the SDK's in-process
+ * server registration for the anvil role tool sets (concierge/team/member/planning). Speaks the
  * same spike-verified streamable-HTTP contract as cc/permission-server.ts; served from the
  * daemon's listener at /api/cc/mcp/<sessionId>/<serverName> with the session bearer.
  *
