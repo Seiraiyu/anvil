@@ -6,15 +6,27 @@
 
 | Task | Description | Status | Tested | Pushed |
 |------|-------------|--------|--------|--------|
-| 1 | `ccDir` in config (test first) | pending | no | no |
-| 2 | Installer-contract spike (LIVE probe, resolves design Assumption 4) | pending | no | no |
-| 3 | `CcInstalls` store: versions, atomic flip, rollback (test first) | pending | no | no |
-| 4 | Downloader: injectable type + official implementation per spike | pending | no | no |
-| 5 | `cc/smoke.ts` smoke gate (fake-runner tests + gated live test) | pending | no | no |
-| 6 | `cc/update.ts` orchestrator: state file, in-flight guard, check/apply/rollback | pending | no | no |
-| 7 | REST surface `/api/cc/v1/*` + `cc-update` capability + contract test | pending | no | no |
-| 8 | Web UI: CC card in server settings, poll-based apply, rollback button | pending | no | no |
-| 9 | Bridge `ANVIL_CLI_PATH` → managed `current` (SDK path benefits pre-Plan-3) | pending | no | no |
+| 1 | `ccDir` in config (test first) | done | yes | yes |
+| 2 | Installer-contract spike (LIVE probe, resolves design Assumption 4) | done | yes | yes |
+| 3 | `CcInstalls` store: versions, atomic flip, rollback (test first) | done | yes | yes |
+| 4 | Downloader: injectable type + official implementation per spike | done | yes | yes |
+| 5 | `cc/smoke.ts` smoke gate (fake-runner tests + gated live test) | done | yes | yes |
+| 6 | `cc/update.ts` orchestrator: state file, in-flight guard, check/apply/rollback | done | yes | yes |
+| 7 | REST surface `/api/cc/v1/*` + `cc-update` capability + contract test | done | yes | yes |
+| 8 | Web UI: CC card in server settings, poll-based apply, rollback button | done | yes | yes |
+| 9 | Bridge `ANVIL_CLI_PATH` → managed `current` (SDK path benefits pre-Plan-3) | done | yes | yes |
+
+Execution notes (2026-08-13): **Assumption 4 resolved differently than sketched** — install.sh
+has no directory control (`claude install` takes only a version), but exposes the release
+bucket's direct-download contract (`downloads.claude.ai/claude-code-releases/{latest,stable,
+<v>/manifest.json,<v>/<platform>/claude}`, sha256 in the manifest). `officialDownloader`
+downloads directly; no HOME-redirect fallback needed. Not every patch version is published
+(2.1.230 → 404) — pinned targets must come from latest/stable or a previously-seen version.
+Live-verified: probe (latest + pinned 2.1.229) and the smoke gate against claude 2.1.231
+(`CC_SMOKE_LIVE=1`). The smoke turn runs `--setting-sources "" --strict-mcp-config` (plan-1
+finding: host hooks otherwise precede init). CommandRunner gained `timeoutMs` (Bun.spawn
+native timeout). REST responses carry `ccApiVersion`; contract pins live in
+`test/unit/cc-api-contract.test.ts` (no OpenAPI doc — inline required-field table).
 
 ### Task 1: `ccDir` in config
 
