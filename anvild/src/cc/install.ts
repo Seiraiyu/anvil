@@ -83,6 +83,14 @@ export function bridgeCliPath(installs: CcInstalls, env: Record<string, string |
   if (bin && !env.ANVIL_CLI_PATH) env.ANVIL_CLI_PATH = bin;
 }
 
+/** The CC binary vector: the managed-install bridge (ANVIL_CLI_PATH, above) or PATH's `claude`.
+ *  Shared by the turn-runner, the one-shots, and the supervisor's PTY attach flow — lives here
+ *  (a leaf module) so none of those pull each other in just for this. */
+export function resolveCcCommand(env: Record<string, string | undefined>): string[] {
+  const cli = env.ANVIL_CLI_PATH?.trim();
+  return cli ? [cli] : ["claude"];
+}
+
 // ── Downloader ──────────────────────────────────────────────────────────────────────────
 // Contract verified live by test/tools/probe-cc-installer.ts (2026-08-13): the official
 // install.sh has no directory control, but the release bucket it reads from does exactly

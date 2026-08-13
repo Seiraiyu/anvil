@@ -24,6 +24,7 @@ import { askUserQuestionToolIds, extractResultUsage, extractSessionId, mapMessag
 import { buildCommandInfo } from "../agent/skills";
 import { buildFileOffer, deliverablePath, maybeTaildrop } from "../agent/file-offer";
 import { GOAL_TRANSCRIPT_LINES } from "../agent/goal";
+import { resolveCcCommand } from "./install";
 import { NdjsonSplitter, parseCCLine, type CCMessage } from "./stream";
 import { spawnInGroup, killGroup, type Group } from "../session/procgroup";
 import type { Session } from "../session/session";
@@ -106,13 +107,6 @@ interface QueuedPrompt {
 /** Compact a token count for a human-facing divider: 1234 → "1.2k", 987 → "987". */
 function fmtTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
-}
-
-/** The CC binary vector: the plan-2 managed-install bridge (ANVIL_CLI_PATH) or PATH's `claude`.
- *  Shared with the supervisor's attach flow (plan 6), which spawns the same binary in a PTY. */
-export function resolveCcCommand(env: Record<string, string | undefined>): string[] {
-  const cli = env.ANVIL_CLI_PATH?.trim();
-  return cli ? [cli] : ["claude"];
 }
 
 export class TurnRunner implements SessionDriver {
@@ -213,6 +207,9 @@ export class TurnRunner implements SessionDriver {
       group.child.stdout!.on("data", (chunk: string) => {
         for (const line of splitter.push(chunk)) this.handleLine(line, () => (sawResult = true));
       });
+      // 'exit' can fire BEFORE the pipe's final buffered chunks are delivered — waiting on stdout
+      // 'close' too keeps the last line (usually the `result` message) from being silently lost.
+      const stdoutClosed = new Promise<void>((r) => group.child.stdout!.once("close", () => r()));
       group.child.stderr!.setEncoding("utf8");
       group.child.stderr!.on("data", (chunk: string) => {
         stderrTail.push(chunk);
@@ -220,6 +217,7 @@ export class TurnRunner implements SessionDriver {
       });
 
       const code = await group.exited;
+      await stdoutClosed;
       // A CLI that died mid-line still gets its last words parsed (crash-mid-line case).
       const tail = splitter.flush();
       if (tail) this.handleLine(tail, () => (sawResult = true));

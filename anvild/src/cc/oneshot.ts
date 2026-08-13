@@ -31,7 +31,7 @@ import { renderGuardHookScript } from "../agent/pipeline-guard";
 import type { AccountStore } from "../auth/accounts";
 import { spawnInGroup, killGroup, type Group } from "../session/procgroup";
 import { NdjsonSplitter, parseCCLine, type CCMessage } from "./stream";
-import { resolveCcCommand } from "./turn-runner";
+import { resolveCcCommand } from "./install";
 
 /** What a one-shot returns. (The successor to agent/query.ts's AgentQueryResult.) */
 export interface AgentQueryResult {
@@ -56,6 +56,9 @@ export interface CcQueryOpts {
   /** Test seam: extra child env (FAKE_CC_* config) merged over the §3 allow-list. */
   extraEnv?: Record<string, string>;
 }
+
+/** The fake-cc test seam every one-shot caller threads through (never set in prod). */
+export type CcSeam = Pick<CcQueryOpts, "ccCommand" | "extraEnv">;
 
 /** The interpreter for the generated guard hook: this daemon's own bun when we're running under
  *  one (robust against PATH surprises), else a bare `bun` resolved from the child's PATH. */
@@ -126,6 +129,9 @@ async function collect(
   group.child.stdout!.on("data", (chunk: string) => {
     for (const line of splitter.push(chunk)) handle(line);
   });
+  // 'exit' can fire BEFORE the pipe's final buffered chunks are delivered — waiting on stdout
+  // 'close' too keeps the last line (usually the `result` message) from being silently lost.
+  const stdoutClosed = new Promise<void>((r) => group.child.stdout!.once("close", () => r()));
   group.child.stderr!.setEncoding("utf8");
   group.child.stderr!.on("data", (chunk: string) => {
     stderrTail.push(chunk);
@@ -133,6 +139,7 @@ async function collect(
   });
 
   const code = await group.exited;
+  await stdoutClosed;
   const tail = splitter.flush();
   if (tail) handle(tail); // a CLI that died mid-line still gets its last words parsed
 

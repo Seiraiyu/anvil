@@ -45,11 +45,16 @@ function isDangerous(toolName: string, input: Record<string, unknown>, cwd?: str
     .join(" ");
   if (SECRET_PATH.test(pathish)) return { danger: true, reason: "credential/secret path" };
 
-  // writes resolving outside the session worktree
+  // writes resolving outside the session worktree — compare against cwd + "/" so a sibling dir
+  // sharing the worktree's path prefix (…/sess-1 vs …/sess-1x) cannot slip through
   if (cwd && (toolName === "Write" || toolName === "Edit" || toolName === "NotebookEdit")) {
     const fp = input.file_path ?? input.notebook_path;
-    if (typeof fp === "string" && fp.startsWith("/") && !resolve(fp).startsWith(resolve(cwd))) {
-      return { danger: true, reason: "write outside the session worktree" };
+    if (typeof fp === "string" && fp.startsWith("/")) {
+      const abs = resolve(fp);
+      const root = resolve(cwd);
+      if (abs !== root && !abs.startsWith(`${root}/`)) {
+        return { danger: true, reason: "write outside the session worktree" };
+      }
     }
   }
 
@@ -124,8 +129,10 @@ process.stdin.on("end", () => {
   }
   if (!danger && CWD && (tool === "Write" || tool === "Edit" || tool === "NotebookEdit")) {
     const fp = input.file_path ?? input.notebook_path;
-    if (typeof fp === "string" && fp.startsWith("/") && !resolve(fp).startsWith(resolve(CWD))) {
-      danger = "write outside the session worktree";
+    if (typeof fp === "string" && fp.startsWith("/")) {
+      const abs = resolve(fp);
+      const root = resolve(CWD);
+      if (abs !== root && !abs.startsWith(root + "/")) danger = "write outside the session worktree";
     }
   }
   const out = danger

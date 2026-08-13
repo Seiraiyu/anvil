@@ -1,5 +1,5 @@
 import { GOAL_MAX_ITERATIONS, type SessionGoal } from "@protocol";
-import { runCcMicroQuery, type CcMicroQueryOpts } from "../cc/oneshot";
+import { runCcMicroQuery, type CcSeam } from "../cc/oneshot";
 
 export { GOAL_MAX_ITERATIONS };
 
@@ -52,7 +52,7 @@ export async function judgeGoal(
   condition: string,
   transcript: string,
   env: Record<string, string>,
-  cc?: Pick<CcMicroQueryOpts, "ccCommand" | "extraEnv">,
+  cc?: CcSeam,
 ): Promise<GoalVerdict> {
   const prompt =
     `You are judging whether a coding agent has satisfied a stated goal.\n\n` +

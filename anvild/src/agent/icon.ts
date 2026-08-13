@@ -1,4 +1,4 @@
-import { runCcMicroQuery, type CcMicroQueryOpts } from "../cc/oneshot";
+import { runCcMicroQuery, type CcSeam } from "../cc/oneshot";
 
 /**
  * Curated Material Symbols (Rounded) names. Constraining Sonnet's choice to this set
@@ -25,7 +25,7 @@ const SET = new Set(ICONS);
 export async function pickIcon(
   title: string,
   env: Record<string, string>,
-  cc?: Pick<CcMicroQueryOpts, "ccCommand" | "extraEnv">,
+  cc?: CcSeam,
 ): Promise<string | undefined> {
   const prompt =
     `Choose the single best-fitting icon for a software-development session titled: "${title}".\n` +

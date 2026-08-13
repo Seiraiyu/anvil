@@ -22,6 +22,9 @@ test("pipelineGuardVerdict denies the danger-list set, allows benign tools", () 
   expect(pipelineGuardVerdict("Bash", { command: "bun test" }, cwd).behavior).toBe("allow");
   // write escaping the worktree is dangerous even when the command itself is benign
   expect(pipelineGuardVerdict("Write", { file_path: "/etc/cron.d/evil" }, cwd).behavior).toBe("deny");
+  // a SIBLING dir sharing the worktree's path prefix must not slip through the compare
+  expect(pipelineGuardVerdict("Write", { file_path: "/tmp/worktree-evil/x.ts" }, cwd).behavior).toBe("deny");
+  expect(pipelineGuardVerdict("Write", { file_path: "/tmp/worktreeX/x.ts" }, cwd).behavior).toBe("deny");
   // secret paths are denied across tools
   expect(pipelineGuardVerdict("Read", { file_path: "/tmp/worktree/.env" }, cwd).behavior).toBe("deny");
 });
@@ -56,6 +59,7 @@ test("the generated CC hook script is verdict-equivalent to pipelineGuardVerdict
     ["Read", { file_path: "/tmp/worktree/.env" }],
     ["Write", { file_path: "/etc/cron.d/evil" }],
     ["Write", { file_path: "/tmp/worktree/src/ok.ts" }],
+    ["Write", { file_path: "/tmp/worktree-evil/x.ts" }], // sibling prefix escape
     ["Edit", { file_path: "/tmp/worktree/../escape.ts" }],
     ["Grep", { pattern: "TODO" }],
     ["ExitPlanMode", { plan: "# the plan" }],

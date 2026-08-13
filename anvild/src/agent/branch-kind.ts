@@ -1,4 +1,4 @@
-import { runCcMicroQuery, type CcMicroQueryOpts } from "../cc/oneshot";
+import { runCcMicroQuery, type CcSeam } from "../cc/oneshot";
 
 /**
  * The three remote-branch prefixes anvil uses. The local worktree branch stays the bare session
@@ -35,7 +35,7 @@ export function heuristicKind(text: string): BranchKind {
 export async function classifyBranchKind(
   prompts: string,
   env: Record<string, string>,
-  cc?: Pick<CcMicroQueryOpts, "ccCommand" | "extraEnv">,
+  cc?: CcSeam,
 ): Promise<BranchKind> {
   const brief = prompts.trim().slice(0, 2000);
   if (!brief) return "feature";

@@ -1,7 +1,7 @@
 import type { AutopilotEffort, Model } from "@protocol";
 import { sdkModelId } from "../agent/models";
 import type { AccountStore } from "../auth/accounts";
-import { runCcQuery } from "../cc/oneshot";
+import { runCcQuery, type CcSeam } from "../cc/oneshot";
 import type { TodoistClient, TodoistTask, TodoistSection, TodoistComment } from "./todoist";
 import { readStatus, withStatus, type AnvilStatus } from "./status";
 import { extractPlanMeta, PLAN_META_INSTRUCTION, type PlanClarification } from "./plan-meta";
@@ -54,12 +54,6 @@ export const VALIDATION_INSTRUCTION = `Include a dedicated "## Validation" secti
 - When neither fits, give a precise manual repro: the commands to run and the exact expected output/state.
 State the expected passing outcome for each check so success is unambiguous. Ground every command in tooling that actually exists in this repo (inspect package.json / scripts / existing tests first).`;
 
-/** Test seam threaded to runCcQuery: point the spawn at fake-cc + configure it (never set in prod). */
-export interface CcTestSeam {
-  ccCommand?: string[];
-  extraEnv?: Record<string, string>;
-}
-
 /**
  * Run a one-shot CLI-direct query (cc/oneshot.ts). `readonly` uses plan mode (no writes), where the
  * model delivers its plan via an `ExitPlanMode` tool call rather than the final message — its
@@ -73,7 +67,7 @@ export interface CcTestSeam {
  */
 async function runQuery(
   prompt: string,
-  opts: { model: Model; cwd?: string; readonly?: boolean; signal?: AbortSignal; accounts?: AccountStore; accountId?: string; cc?: CcTestSeam },
+  opts: { model: Model; cwd?: string; readonly?: boolean; signal?: AbortSignal; accounts?: AccountStore; accountId?: string; cc?: CcSeam },
 ): Promise<{ text: string; plan?: string }> {
   return runCcQuery(prompt, {
     model: { id: "claude", profile: "claude", sdkModel: sdkModelId(opts.model), label: opts.model },
@@ -168,7 +162,7 @@ async function fetchComments(
 export async function bundleTasks(
   tasks: TodoistTask[],
   sections: TodoistSection[],
-  opts: { model?: Model; repoName?: string; signal?: AbortSignal; accounts?: AccountStore; accountId?: string; cc?: CcTestSeam } = {},
+  opts: { model?: Model; repoName?: string; signal?: AbortSignal; accounts?: AccountStore; accountId?: string; cc?: CcSeam } = {},
 ): Promise<ProposedUnit[]> {
   if (tasks.length === 0) return [];
   const sectionName = (id?: string | null) => sections.find((s) => s.id === id)?.name;
@@ -211,7 +205,7 @@ export async function planUnit(
     /** Bill this run to a specific Claude account (the environment's, multi-account §6). */
     accounts?: AccountStore;
     accountId?: string;
-    cc?: CcTestSeam;
+    cc?: CcSeam;
   },
 ): Promise<PlannedUnit> {
   const members = tasks.filter((t) => unit.taskIds.includes(t.id));
@@ -275,7 +269,7 @@ ${PLAN_META_INSTRUCTION}`;
 export async function classifyIntake(
   unit: ProposedUnit,
   tasks: TodoistTask[],
-  opts: { model?: Model; signal?: AbortSignal; comments?: Map<string, TodoistComment[]>; accounts?: AccountStore; accountId?: string; cc?: CcTestSeam } = {},
+  opts: { model?: Model; signal?: AbortSignal; comments?: Map<string, TodoistComment[]>; accounts?: AccountStore; accountId?: string; cc?: CcSeam } = {},
 ): Promise<IntakeVerdict> {
   const taskBlock = tasks.map((t) => taskLine(t, { comments: opts.comments?.get(t.id) })).join("\n");
   const prompt = `You are the User Advocate at intake for an autonomous engineering autopilot. If you approve this, it will be implemented UNATTENDED — no human in the loop — and shipped as a pull request. Judge ONLY whether the request is specified well enough to build without inventing material product decisions. Do not plan or solve it.
