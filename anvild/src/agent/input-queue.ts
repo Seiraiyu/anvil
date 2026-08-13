@@ -56,7 +56,7 @@ function looksTextual(mediaType: string, buf: Buffer): boolean {
  * `document`, anything textual → an inline `text` block holding the file's contents (so the model
  * can actually read code/logs/configs), and a short note for binaries we can't inline. (arch §6.5)
  */
-function attachmentBlock(att: InlineAttachment): Record<string, unknown> {
+export function attachmentBlock(att: InlineAttachment): Record<string, unknown> {
   if (att.mediaType.startsWith("image/")) {
     return { type: "image", source: { type: "base64", media_type: att.mediaType, data: att.data } };
   }
