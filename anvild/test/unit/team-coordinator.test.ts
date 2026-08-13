@@ -34,7 +34,7 @@ function harness(opts: { cap?: number; warn?: boolean } = {}) {
   const lead = mkSession({
     id: "lead1",
     teamRole: "lead",
-    autonomy: "mostly-autonomous",
+    permissionMode: "bypassPermissions",
     team: { integration: "combined-pr", maxConcurrentMembers: opts.cap ?? 2 },
   });
 

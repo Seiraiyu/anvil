@@ -1,18 +1,62 @@
 import type { HookCallback, PreToolUseHookInput } from "@anthropic-ai/claude-agent-sdk";
-import { isDangerous } from "./danger-list";
+import { resolve } from "node:path";
 
 /**
- * [SEC-H4] The autonomy backstop for the UNATTENDED dev pipeline (agent/query.ts).
- *
- * Interactive sessions run every tool through the PreToolUse danger list and can PARK a risky
- * op on a permission prompt (permissions.ts). The pipeline has no human in the loop and drives a
- * third-party model (GLM) with Write/Edit/Bash enabled, so there is nobody to ask: the only safe
- * default is to DENY anything the danger list flags and allow the rest. This mirrors the interactive
- * gate's danger check but collapses "park + prompt" to a hard deny, keeping the pipeline from taking
- * a destructive or credential-touching action nobody approved.
+ * [SEC-H4] The safety backstop for the UNATTENDED dev pipeline (agent/query.ts) — retained
+ * through the cc plan 4 permission overhaul (signed off 2026-08-13). Interactive sessions now
+ * defer to CC's own permission engine with a human answering prompts; the pipeline has no human
+ * in the loop and drives a third-party model (GLM) with Write/Edit/Bash enabled, so the only
+ * safe default is to DENY anything this table flags and allow the rest. The table below is the
+ * old repo-wide danger list, now scoped to (and owned by) this guard.
  *
  * `cwd` is the run's worktree; passed through so writes escaping it are treated as dangerous.
  */
+interface DangerVerdict {
+  danger: boolean;
+  reason?: string;
+}
+
+const BASH_PATTERNS: [RegExp, string][] = [
+  [/\brm\s+-[a-z]*r[a-z]*f|\brm\s+-[a-z]*f[a-z]*r/i, "recursive force remove (rm -rf)"],
+  [/\bgit\s+push\b[^\n]*(--force(?!-with-lease)|\s-f\b)/i, "git force-push"],
+  [/\bgit\s+reset\s+--hard\b/i, "git reset --hard"],
+  [/\bgit\s+clean\s+-[a-z]*f/i, "git clean -f"],
+  [/\b(drop\s+database|drop\s+table|truncate\s+table|delete\s+from)\b/i, "destructive SQL"],
+  [/\b(npm|pnpm|yarn)\s+publish\b/i, "package publish"],
+  [/\b(sudo|doas)\b/i, "privilege escalation"],
+  [/:\s*\(\s*\)\s*\{[^}]*\}\s*;/, "fork bomb"],
+  [/\bmkfs\b|\bdd\s+if=[^\n]*of=\/dev\//i, "raw disk write"],
+  [/\bcurl\b[^\n]*\|\s*(sudo\s+)?(sh|bash|zsh)\b/i, "pipe-to-shell from network"],
+];
+
+const SECRET_PATH = /(^|\/)\.env(\.[a-z]+)?$|\/\.ssh\/|id_(rsa|ed25519)|(^|\/)credentials\b|\.pem$|\.p8$|\bsecrets?\b/i;
+
+function isDangerous(toolName: string, input: Record<string, unknown>, cwd?: string): DangerVerdict {
+  const command = typeof input.command === "string" ? input.command : "";
+
+  if (toolName === "Bash" && command) {
+    for (const [re, reason] of BASH_PATTERNS) {
+      if (re.test(command)) return { danger: true, reason };
+    }
+  }
+
+  // credential / secret paths across any tool that names a path
+  const pathish = [input.file_path, input.path, input.notebook_path, command]
+    .filter((x): x is string => typeof x === "string" && x.length > 0)
+    .join(" ");
+  if (SECRET_PATH.test(pathish)) return { danger: true, reason: "credential/secret path" };
+
+  // writes resolving outside the session worktree
+  if (cwd && (toolName === "Write" || toolName === "Edit" || toolName === "NotebookEdit")) {
+    const fp = input.file_path ?? input.notebook_path;
+    if (typeof fp === "string" && fp.startsWith("/") && !resolve(fp).startsWith(resolve(cwd))) {
+      return { danger: true, reason: "write outside the session worktree" };
+    }
+  }
+
+  return { danger: false };
+}
+
 export interface GuardVerdict {
   behavior: "allow" | "deny";
   reason: string;

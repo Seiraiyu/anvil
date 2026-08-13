@@ -12,7 +12,7 @@
  */
 import {
   PROTOCOL_VERSION,
-  type AutonomyPolicy,
+  type PermissionMode,
   type Budget,
   type Environment,
   type Model,
@@ -64,7 +64,7 @@ export interface TeamCoordinatorDeps {
     base?: string | undefined;
     title: string;
     model?: Model | undefined;
-    autonomy?: AutonomyPolicy | undefined;
+    permissionMode?: PermissionMode | undefined;
     brief: string;
     parentId: string;
     teamRole: "member";
@@ -194,15 +194,15 @@ export class TeamCoordinator {
     return `Dismissed member "${title}" (${memberId}); its worktree and branch are being removed.`;
   }
 
-  /** The lead proposed a decomposition. At `bypass` autonomy it auto-approves and spawns; otherwise it
+  /** The lead proposed a decomposition. At `bypassPermissions` it auto-approves and spawns; otherwise it
    *  parks a reviewable `team.plan` card and waits for `team.plan.approve` (see team-gate.ts). */
   private async teamProposePlan(leadId: string, members: TeamPlanMember[], integration: TeamPlan["integration"]): Promise<string> {
     const lead = this.deps.require(leadId);
     if (lead.data.teamRole !== "lead") throw new BadCommand("only a team lead can propose a team plan");
     const plan: TeamPlan = { leadId, members, integration };
-    if (shouldAutoApprove(lead.data.autonomy)) {
+    if (shouldAutoApprove(lead.data.permissionMode)) {
       const started = await this.startTeamPlan(plan);
-      return `Auto-approved (bypass autonomy): started ${started} of ${members.length} member(s); the rest queue as slots free.`;
+      return `Auto-approved (bypassPermissions): started ${started} of ${members.length} member(s); the rest queue as slots free.`;
     }
     this.pendingTeamPlans.set(leadId, plan);
     const ev: TeamPlanEvent = { v: PROTOCOL_VERSION, type: "team.plan", ts: now(), sessionId: leadId, plan };
@@ -362,7 +362,7 @@ export class TeamCoordinator {
       base,
       title,
       model: lead.data.model,
-      autonomy: lead.data.autonomy,
+      permissionMode: lead.data.permissionMode,
       brief: a.brief,
       parentId: leadId,
       teamRole: "member",

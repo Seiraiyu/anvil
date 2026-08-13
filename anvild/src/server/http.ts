@@ -18,7 +18,6 @@ import {
   tailscaleWhois,
   type PeerTrust,
 } from "./pairing";
-import { bindDegradeStateDir } from "../auth/degrade";
 import { setClaudeToken } from "../auth/store";
 import { setOpenRouterKey } from "../auth/openrouter";
 import { FleetStore } from "../fleet/store";
@@ -218,9 +217,6 @@ export function createServer(opts: ServerOptions): ServerHandle {
   const fleetJobs = new FleetJobs();
   const accounts = opts.accounts ?? new AccountStore(opts.stateDir);
   const fleet = new FleetStore(opts.stateDir);
-  // Bind the degrade marker's home so a credential write from ANY path (a direct paste via
-  // `setClaudeToken`, a pair, a rotation) clears it without threading a state dir through (§4.6).
-  bindDegradeStateDir(opts.stateDir);
   /** This machine's join window — default closed, armed only by a human in its own UI (§5.1/§8.2). */
   const pairWindow = new PairingWindow();
   /** The hub this machine was joined by, for rotation gating only (HJ-26). */
@@ -636,7 +632,6 @@ export function createServer(opts: ServerOptions): ServerHandle {
     if (body.todoistToken) {
       void supervisor.connectTodoist(body.todoistToken).catch((e: unknown) => console.warn(`[fleet] pushed Todoist token rejected: ${e instanceof Error ? e.message : e}`));
     }
-    supervisor.authDegrade.recover();
     supervisor.broadcastAuthState();
     if (body.accounts) supervisor.broadcastAccounts();
     void supervisor.restartIdleSessionsForNewToken(before);

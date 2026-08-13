@@ -14,8 +14,8 @@ const stamp = (o: object) => JSON.stringify({ v: 1, ts: new Date().toISOString()
 let sessionId = "";
 let deltas = 0;
 
-const autonomy = process.env.ANVIL_AUTONOMY ?? "mostly-autonomous";
-ws.onopen = () => ws.send(stamp({ type: "session.create", cid: "c", source: "existing-dir", cwd, model, autonomy }));
+const permissionMode = process.env.ANVIL_PERMISSION_MODE ?? "bypassPermissions";
+ws.onopen = () => ws.send(stamp({ type: "session.create", cid: "c", source: "existing-dir", cwd, model, permissionMode }));
 ws.onmessage = (ev) => {
   const m = JSON.parse(String((ev as MessageEvent).data));
   switch (m.type) {

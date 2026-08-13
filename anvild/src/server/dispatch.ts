@@ -137,8 +137,8 @@ export function dispatch(conn: ConnState, raw: string, send: Send, deps: Dispatc
         ackWhenDone(deps.supervisor.setSessionAccount(cmd.sessionId, cmd.accountId), send, cid);
         return;
 
-      case "session.set_autonomy":
-        deps.supervisor.setAutonomy(cmd.sessionId, cmd.policy);
+      case "session.set_permission_mode":
+        deps.supervisor.setPermissionMode(cmd.sessionId, cmd.mode);
         if (cid) send(ack(cid));
         return;
 
@@ -363,7 +363,7 @@ export function dispatch(conn: ConnState, raw: string, send: Send, deps: Dispatc
 
       case "autopilot.plan.session":
         deps.supervisor
-          .startPlanningSession(cmd.workUnitId, cmd.model, cmd.autonomy, cid)
+          .startPlanningSession(cmd.workUnitId, cmd.model, cmd.permissionMode, cid)
           .then((event) => send(event))
           .catch((e) => send(cmdError(errMsg(e), cid)));
         return;
@@ -375,7 +375,7 @@ export function dispatch(conn: ConnState, raw: string, send: Send, deps: Dispatc
       case "autopilot.start":
         // [BE2-2] Go spawns a fresh-worktree session (async git) — settle off the dispatch path.
         deps.supervisor
-          .startPlan(cmd.workUnitId, cmd.model, cmd.autonomy, cid)
+          .startPlan(cmd.workUnitId, cmd.model, cmd.permissionMode, cid)
           .then((event) => send(event))
           .catch((e) => send(cmdError(errMsg(e), cid)));
         return;

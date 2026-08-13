@@ -57,7 +57,7 @@
 // on the versioned WS channel — the web client's "Update Anvil" rides POST /api/daemon/update (rest.
 // DaemonUpdateResponse), which carries no protocol version, so recovery can't be blocked by the very
 // skew it exists to repair. The `daemon.update` WS command remains for native clients.
-export const PROTOCOL_VERSION = 4 as const;
+export const PROTOCOL_VERSION = 5 as const;
 export type ProtocolVersion = typeof PROTOCOL_VERSION;
 
 /**
@@ -116,12 +116,19 @@ export const modelLabel = (m: Model): string => MODELS.find((x) => x.id === m)?.
 /** Whether a value is one of the models a session may switch to. */
 export const isModel = (m: unknown): m is Model => MODELS.some((x) => x.id === m);
 
-export type AutonomyPolicy =
-  | "mostly-autonomous" // default: auto-allow; prompt only on the danger list (§6.6)
-  | "allowlist" // auto-allow reads/searches/safe cmds; prompt for writes/net
-  | "prompt-all" // ask on every tool use
-  | "bypass"; // DANGER: never prompt — allow every tool, incl. the danger list
-  //           (the daemon equivalent of `claude --dangerously-skip-permissions`)
+/**
+ * Claude Code's native permission modes (cc-cli-transport §4.7 delta 1 — replaces the old
+ * autonomy dial). Maps 1:1 to the CLI's `--permission-mode`; the CLI's own engine decides
+ * which calls prompt, and prompts route to the daemon's approve tool (design §4.4).
+ */
+export type PermissionMode =
+  | "default" // CC's standard engine: safe tools auto-allowed, everything else prompts
+  | "acceptEdits" // file edits auto-accepted; other prompt-worthy tools still prompt
+  | "plan" // read-only planning: edits/writes blocked
+  | "bypassPermissions"; // DANGER: never prompt — allow every tool
+
+export const PERMISSION_MODES: readonly PermissionMode[] = ["default", "acceptEdits", "plan", "bypassPermissions"];
+export const isPermissionMode = (m: unknown): m is PermissionMode => PERMISSION_MODES.includes(m as PermissionMode);
 
 export type SessionSource = "existing-dir" | "fresh-worktree";
 
@@ -274,7 +281,7 @@ export interface Session {
   worktree?: Worktree; // present when source === "fresh-worktree"
   git?: GitStatus;
   model: Model; // default "opus" (§3)
-  autonomy: AutonomyPolicy; // default "mostly-autonomous" (§6.6)
+  permissionMode: PermissionMode; // default "bypassPermissions" (matches the old mostly-autonomous behavior)
   adversarialReview?: boolean; // opt-in: when planning, competing OpenRouter models critique the plan
   // before execution (the autopilot adversarial panel, brought to interactive sessions). Advisory only;
   // needs an OpenRouter key. Default off. (§6.6 / adversarial panel)
@@ -1142,7 +1149,7 @@ export interface SessionCreateCmd extends Envelope, Correlated {
   title?: string;
   environmentId?: string; // the Environment this came from (for grouping/labeling)
   model?: Model; // defaults to "opus"
-  autonomy?: AutonomyPolicy; // defaults to "mostly-autonomous"
+  permissionMode?: PermissionMode; // defaults to "bypassPermissions" (the old mostly-autonomous behavior)
   adversarialReview?: boolean; // defaults to false (adversarial plan review; needs an OpenRouter key)
   // ── Teams: create this session as a team lead (see docs/plans/anvil-team-support.md). A lead is an
   //    ordinary session that also gets the lead orchestration MCP tools + an integration/concurrency
@@ -1206,10 +1213,10 @@ export interface SessionSetModelCmd extends Envelope, Correlated {
   sessionId: SessionId;
   model: Model;
 }
-export interface SessionSetAutonomyCmd extends Envelope, Correlated {
-  type: "session.set_autonomy";
+export interface SessionSetPermissionModeCmd extends Envelope, Correlated {
+  type: "session.set_permission_mode";
   sessionId: SessionId;
-  policy: AutonomyPolicy;
+  mode: PermissionMode;
 }
 export interface SessionSetAdversarialReviewCmd extends Envelope, Correlated {
   type: "session.set_adversarial_review";
@@ -1432,7 +1439,7 @@ export interface AutopilotPlanSessionCmd extends Envelope, Correlated {
   // the design so far, and any open questions; Claude works the plan out (and can build) → autopilot.started
   workUnitId: string;
   model?: Model; // defaults to "opus"
-  autonomy?: AutonomyPolicy; // defaults to "mostly-autonomous" (interactive: it asks the open questions, doesn't blast ahead)
+  permissionMode?: PermissionMode; // defaults to "default" (interactive: it asks the open questions, doesn't blast ahead)
 }
 export interface AutopilotDismissCmd extends Envelope, Correlated {
   type: "autopilot.dismiss"; // reject a plan: label its tasks anvil:dismissed, drop the card
@@ -1442,7 +1449,7 @@ export interface AutopilotStartCmd extends Envelope, Correlated {
   type: "autopilot.start"; // create a worktree session seeded with the plan and start it → autopilot.started
   workUnitId: string;
   model?: Model; // defaults to "opus"
-  autonomy?: AutonomyPolicy; // defaults to "bypass" (auto-start working without permission stalls)
+  permissionMode?: PermissionMode; // defaults to "bypassPermissions" (auto-start working without permission stalls)
 }
 export interface AutopilotPipelineStartCmd extends Envelope, Correlated {
   type: "autopilot.pipeline.start"; // run the autonomous dev pipeline (§4) for a unit → autopilot.pipeline.result
@@ -1594,7 +1601,7 @@ export type ClientCommand =
   | SessionNewTopicCmd
   | SessionAccountSetCmd
   | SessionSetModelCmd
-  | SessionSetAutonomyCmd
+  | SessionSetPermissionModeCmd
   | SessionSetAdversarialReviewCmd
   | TeamPlanApproveCmd
   | TeamPlanRejectCmd

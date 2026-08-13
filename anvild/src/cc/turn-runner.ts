@@ -142,7 +142,9 @@ export class TurnRunner implements SessionDriver {
       "--include-partial-messages",
       "--verbose",
       "--model", sdkModelId(s.data.model),
-      "--permission-mode", this.deps.permissionMode ?? "default",
+      // The session's own mode, 1:1 with the CLI engine (protocol delta 1); re-read every spawn
+      // so a mid-conversation session.set_permission_mode lands on the next turn.
+      "--permission-mode", s.data.permissionMode ?? this.deps.permissionMode ?? "default",
       // The daemon — not the host machine's ambient Claude config — is the authority (arch §6.6):
       // no user/project settings (hooks/plugins), no ambient MCP servers. Mirrors the SDK path's
       // settingSources: [] and keeps `init` the first stream line (plan-1 finding).

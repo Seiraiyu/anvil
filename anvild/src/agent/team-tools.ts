@@ -11,7 +11,7 @@ import type { TeamInfo, TeamPlanMember } from "@protocol";
 export interface TeamToolDeps {
   /** The lead session these tools belong to. */
   leadId: string;
-  /** Propose a decomposition. Routes through the autonomy gate: auto-approves at `bypass`, otherwise
+  /** Propose a decomposition. Routes through the permission gate: auto-approves at `bypassPermissions`, otherwise
    *  parks a reviewable team-plan card. Returns a human-readable summary of what happened.
    *  [BE2-2] May resolve asynchronously (auto-approve spawns members via async git). */
   proposePlan(members: TeamPlanMember[], integration: "combined-pr" | "pr-per-member"): string | Promise<string>;
@@ -70,7 +70,7 @@ export function teamTools(deps: TeamToolDeps): SdkMcpToolDefinition<any>[] {
         "propose_team_plan",
         "Propose how to split the goal into parallel member sessions. Each member gets its own task " +
           "and (usually) its own git worktree branched off yours. This proposal is GATED: at 'bypass' " +
-          "autonomy it auto-approves and members spawn immediately; otherwise it surfaces a plan card " +
+          "permission mode it auto-approves and members spawn immediately; otherwise it surfaces a plan card " +
           "the user approves/edits first. Call this ONCE you've decided the decomposition.",
         {
           members: z.array(memberSchema).min(1).describe("The members to spawn, in a sensible order."),

@@ -1,38 +1,51 @@
 import { test, expect } from "bun:test";
 import type { Question } from "@protocol";
 import { QuestionBroker, makeCanUseTool } from "../../src/agent/questions";
+import { PermissionBroker } from "../../src/agent/permissions";
 import type { Session } from "../../src/session/session";
 
 /** Minimal Session stub: the handler only needs `id` and `requestQuestion`. */
-function fakeSession(): { session: Session; asked: { requestId: string; questions: Question[] }[] } {
+function fakeSession(): { session: Session; asked: { requestId: string; questions: Question[] }[]; perms: { requestId: string; tool: string }[] } {
   const asked: { requestId: string; questions: Question[] }[] = [];
+  const perms: { requestId: string; tool: string }[] = [];
   const session = {
     id: "sess_1",
     requestQuestion(requestId: string, questions: Question[]) {
       asked.push({ requestId, questions });
     },
+    requestPermission(requestId: string, tool: string) {
+      perms.push({ requestId, tool });
+    },
+    isAlwaysAllowed: () => false,
+    rememberAllow: () => {},
   } as unknown as Session;
-  return { session, asked };
+  return { session, asked, perms };
 }
 
 const opts = { signal: new AbortController().signal, toolUseID: "tool_1" } as any;
+const permBroker = new PermissionBroker();
 const input = {
   questions: [
     { question: "Which library?", header: "Library", options: [{ label: "date-fns", description: "small" }, { label: "luxon", description: "rich" }] },
   ],
 };
 
-test("non-AskUserQuestion tools allow through unchanged (the hook already vetted them)", async () => {
+test("non-AskUserQuestion asks park in the permission path (CC-native since cc plan 4)", async () => {
   const broker = new QuestionBroker();
-  const { session } = fakeSession();
-  const canUseTool = makeCanUseTool(session, broker);
-  expect(await canUseTool("Read", { file_path: "/tmp/x" }, opts)).toEqual({ behavior: "allow", updatedInput: { file_path: "/tmp/x" } });
+  const { session, perms } = fakeSession();
+  const canUseTool = makeCanUseTool(session, broker, permBroker);
+  const pending = canUseTool("Read", { file_path: "/tmp/x" }, opts);
+  await new Promise((r) => setTimeout(r, 5));
+  expect(perms).toHaveLength(1);
+  expect(perms[0]!.tool).toBe("Read");
+  permBroker.resolve(perms[0]!.requestId, "allow");
+  expect(await pending).toEqual({ behavior: "allow", updatedInput: { file_path: "/tmp/x" } });
 });
 
 test("answered question → allow with answers in updatedInput", async () => {
   const broker = new QuestionBroker();
   const { session, asked } = fakeSession();
-  const canUseTool = makeCanUseTool(session, broker);
+  const canUseTool = makeCanUseTool(session, broker, permBroker);
 
   const resultP = canUseTool("AskUserQuestion", input, opts);
   // The handler parks a request; answer it via the broker (as dispatch/supervisor would).
@@ -51,7 +64,7 @@ test("answered question → allow with answers in updatedInput", async () => {
 test("multiSelect answers become an array; free-text becomes annotations", async () => {
   const broker = new QuestionBroker();
   const { session, asked } = fakeSession();
-  const canUseTool = makeCanUseTool(session, broker);
+  const canUseTool = makeCanUseTool(session, broker, permBroker);
   const resultP = canUseTool("AskUserQuestion", input, opts);
   broker.resolve(asked[0]!.requestId, {
     cancelled: false,
@@ -66,7 +79,7 @@ test("multiSelect answers become an array; free-text becomes annotations", async
 test("skipped/cancelled answer → allow with no answers (CLI emits 'did not answer', model proceeds)", async () => {
   const broker = new QuestionBroker();
   const { session, asked } = fakeSession();
-  const canUseTool = makeCanUseTool(session, broker);
+  const canUseTool = makeCanUseTool(session, broker, permBroker);
   const resultP = canUseTool("AskUserQuestion", input, opts);
   broker.resolve(asked[0]!.requestId, { cancelled: true });
   const result = (await resultP) as any;
@@ -77,7 +90,7 @@ test("skipped/cancelled answer → allow with no answers (CLI emits 'did not ans
 test("resolveSession cancels every parked question for a session", async () => {
   const broker = new QuestionBroker();
   const { session, asked } = fakeSession();
-  const canUseTool = makeCanUseTool(session, broker);
+  const canUseTool = makeCanUseTool(session, broker, permBroker);
   const resultP = canUseTool("AskUserQuestion", input, opts);
   expect(broker.resolveSession("sess_1")).toBe(1);
   const result = (await resultP) as any;

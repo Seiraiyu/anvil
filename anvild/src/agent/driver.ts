@@ -197,7 +197,8 @@ export class AgentDriver {
         systemPrompt: this.systemPrompt(),
         resume: s.data.claudeSessionId,
         includePartialMessages: true,
-        permissionMode: "default",
+        // CC-native (cc plan 4): the session's own mode drives the SDK engine 1:1.
+        permissionMode: s.data.permissionMode,
         // Load NO on-disk settings, so the daemon — not the user's ambient Claude Code
         // allow-rules — is the permission authority (arch §6.6). (Trade-off: the repo's
         // CLAUDE.md isn't auto-loaded; project context can be injected later.)
@@ -207,10 +208,8 @@ export class AgentDriver {
         // so `settingSources: []` above still holds and the PreToolUse hook stays authoritative
         // (§skills). `skills: "all"` enables every discovered skill + the Skill tool.
         ...(this.plugins && this.plugins.length ? { plugins: this.plugins, skills: "all" as const } : {}),
-        // PreToolUse fires on EVERY tool → the autonomy policy + danger list govern all
-        // tools, and a blocked prompt parks here (timeout high enough to answer from a
-        // phone). This is the authoritative gate (M7); canUseTool alone only sees ops the
-        // CLI already flags.
+        // CC-native (cc plan 4): the hook only runs the advisory plan review; the SDK's own
+        // permission engine decides what prompts, and asks surface via canUseTool → brokers.
         hooks: {
           PreToolUse: [{ hooks: [makePreToolUseHook(s, this.broker, this.onPlanProposed)], timeout: 3600 }],
           // The goal hook (design 2026-07-25). Registered unconditionally — the SDK offers no way to
@@ -238,7 +237,7 @@ export class AgentDriver {
         // canUseTool parks the question, surfaces the card, and returns the answer via updatedInput.
         // (The PreToolUse hook is still the authoritative gate for every other tool — a hook
         // allow/deny short-circuits before canUseTool, so canUseTool only ever sees AskUserQuestion.)
-        canUseTool: makeCanUseTool(s, this.questionBroker),
+        canUseTool: makeCanUseTool(s, this.questionBroker, this.broker),
         ...claudeCliOptions(), // executable:"bun" in dev; pathToClaudeCodeExecutable when packaged (§3.1)
         env: this.env, // §3 allow-list; no ANTHROPIC_API_KEY
         ...(this.mcpServers ? { mcpServers: this.mcpServers } : {}),

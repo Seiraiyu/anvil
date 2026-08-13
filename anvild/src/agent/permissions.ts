@@ -1,7 +1,6 @@
 import type { HookCallback, PreToolUseHookInput } from "@anthropic-ai/claude-agent-sdk";
 import type { PermissionDecision, PermissionSuggestion } from "@protocol";
 import { newId } from "../util/ids";
-import { isDangerous, isReadOnly } from "./danger-list";
 import type { Session } from "../session/session";
 
 interface ResolvedDecision {
@@ -62,102 +61,58 @@ export const SUGGESTIONS = (tool: string): PermissionSuggestion[] => [
 export type PlanProposedHook = (plan: string) => Promise<void>;
 
 /**
- * The authoritative permission gate (arch §6.6). Registered as a `PreToolUse` hook so it
- * fires on EVERY tool — making the daemon's autonomy policy + danger list govern all tools,
- * rather than deferring to the CLI's own heuristics (which `canUseTool` alone does not).
- *
- * `onPlanProposed`, when set, runs the adversarial plan review the moment the model calls
- * ExitPlanMode and BEFORE the normal permission decision, so the panel's verdict is surfaced
- * alongside the plan. It's advisory: it never changes the permission outcome.
+ * PreToolUse hook for the (legacy, until Plan 8) SDK transport — CC-NATIVE since cc plan 4:
+ * the old autonomy-policy engine and its danger table are gone. The CLI's own permission engine decides
+ * what prompts; prompt-worthy calls surface through `canUseTool` (agent/questions.ts) → the
+ * brokers → every device. This hook only:
+ *   - runs the advisory adversarial plan review when the model calls ExitPlanMode;
+ *   - lets everything fall through with a bare `continue` so the engine's verdict stands.
  */
 export function makePreToolUseHook(
   session: Session,
-  broker: PermissionBroker,
+  _broker: PermissionBroker,
   onPlanProposed?: PlanProposedHook,
 ): HookCallback {
   return async (input) => {
     const i = input as PreToolUseHookInput;
-    const tool = i.tool_name;
-    const toolInput = (i.tool_input ?? {}) as Record<string, unknown>;
-
-    // The model is committing to a plan and asking to leave plan mode: run the adversarial panel
-    // over it first (advisory). Awaited so the critique is emitted before ExitPlanMode proceeds;
-    // the hook itself is defensive, but never let a review failure block the tool. (adversarial panel)
-    if (tool === "ExitPlanMode" && onPlanProposed) {
+    if (i.tool_name === "ExitPlanMode" && onPlanProposed) {
+      const toolInput = (i.tool_input ?? {}) as Record<string, unknown>;
       try {
         await onPlanProposed(typeof toolInput.plan === "string" ? toolInput.plan : "");
       } catch {
         /* advisory only — a panel failure must never block the plan */
       }
     }
-
-    // AskUserQuestion must fall through with NO permission decision. Its checkPermissions resolves
-    // to "ask", and the SDK only routes that "ask" to our canUseTool (where we surface the question
-    // card and feed the answer back via updatedInput) when no hook/rule has already decided it.
-    // Returning *any* concrete decision here — even "allow" — short-circuits before canUseTool: the
-    // tool then runs with empty answers and its result becomes "The user did not answer the
-    // questions." (the model continues unanswered). Emit a bare continue so the "ask" reaches
-    // canUseTool. (arch §6.6 — see src/agent/questions.ts)
-    if (tool === "AskUserQuestion") return { continue: true };
-
-    const out = await decide(session, broker, tool, toolInput);
-    return {
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: out.behavior,
-        permissionDecisionReason: out.reason,
-        ...(out.updatedInput ? { updatedInput: out.updatedInput } : {}),
-      },
-    };
+    void session;
+    return { continue: true };
   };
 }
 
-interface Decision {
-  behavior: "allow" | "deny";
-  updatedInput?: Record<string, unknown>;
-  reason?: string;
-}
+export type AskPermissionResult =
+  | { behavior: "allow"; updatedInput: Record<string, unknown> }
+  | { behavior: "deny"; message: string };
 
-async function decide(
+/**
+ * Park one prompt-worthy tool call for a human (arch §6.6) — the shared core of BOTH transports:
+ * the CLI path's MCP approve tool (cc/permission-server.ts) and the SDK path's canUseTool
+ * (agent/questions.ts). Fans the permission.request card to every device and holds indefinitely
+ * (pocket-phone is the product); session.reset force-resolves wedged prompts.
+ */
+export async function askPermission(
   session: Session,
   broker: PermissionBroker,
-  tool: string,
+  toolName: string,
   input: Record<string, unknown>,
-): Promise<Decision> {
-  // NOTE: AskUserQuestion is handled before this point in makePreToolUseHook — it must fall through
-  // with no decision so its "ask" verdict reaches canUseTool (where the question card is surfaced).
-  // Do not re-add it here: a decision returned from the hook short-circuits before canUseTool (arch §6.6).
-  if (session.isAlwaysAllowed(tool)) {
-    return { behavior: "allow", updatedInput: input, reason: "remembered allow" };
-  }
-
-  const policy = session.data.autonomy;
-
-  // "bypass" is the daemon equivalent of `claude --dangerously-skip-permissions`: allow every
-  // tool unconditionally, skipping even the danger list. Short-circuit before isDangerous() so a
-  // user who opted into this mode is never parked on a prompt (arch §6.6).
-  if (policy === "bypass") {
-    return { behavior: "allow", updatedInput: input, reason: "bypass: permissions skipped" };
-  }
-
-  const verdict = isDangerous(tool, input, session.data.cwd);
-  const mustPrompt =
-    policy === "prompt-all" ||
-    (policy === "allowlist" && !isReadOnly(tool)) ||
-    (policy === "mostly-autonomous" && verdict.danger);
-
-  if (!mustPrompt) {
-    return { behavior: "allow", updatedInput: input, reason: "auto-allowed by autonomy policy" };
-  }
+): Promise<AskPermissionResult> {
+  // A remembered "always allow" answers the re-ask inside the daemon — no card, no round trip.
+  if (session.isAlwaysAllowed(toolName)) return { behavior: "allow", updatedInput: input };
 
   const requestId = newId("perm");
   const answer = broker.request(requestId, session.id);
-  session.requestPermission(requestId, tool, input, SUGGESTIONS(tool));
+  session.requestPermission(requestId, toolName, input, SUGGESTIONS(toolName));
   const ans = await answer;
 
-  if (ans.decision === "deny") {
-    return { behavior: "deny", reason: verdict.reason ? `denied (${verdict.reason})` : "denied by user" };
-  }
-  if (ans.decision === "allow_always") session.rememberAllow(tool);
-  return { behavior: "allow", updatedInput: ans.updatedInput ?? input };
+  if (ans.decision === "deny") return { behavior: "deny", message: "denied by user" };
+  if (ans.decision === "allow_always") session.rememberAllow(toolName);
+  return { behavior: "allow", updatedInput: (ans.updatedInput as Record<string, unknown>) ?? input };
 }

@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildAgentEnv, OPENROUTER_ANTHROPIC_BASE_URL } from "../../src/agent/env";
-import { checkAuth } from "../../src/auth/guard";
+import { checkAuth } from "../../src/auth/accounts";
 import { AccountStore } from "../../src/auth/accounts";
 import { CLAUDE, GLM, roster, assertIndependent, PHASE_ASSIGNMENT } from "../../src/agent/model-roster";
 

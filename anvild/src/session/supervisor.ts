@@ -6,7 +6,7 @@ import {
   type AttachmentRef,
   type DirEntry,
   type FileContent,
-  type AutonomyPolicy,
+  type PermissionMode,
   type Budget,
   type BudgetEvent,
   type DaemonUpdateResultEvent,
@@ -38,6 +38,7 @@ import {
   type GitCmd,
   type GitResultEvent,
   isModel,
+  isPermissionMode,
   type Model,
   type PermissionDecision,
   type QuestionAnswer,
@@ -109,7 +110,6 @@ import { updateApply, updateCheck, type UpdateApiDeps } from "../daemon/update-a
 import { VERSION } from "../version";
 import { pickIcon } from "../agent/icon";
 import { classifyBranchKind } from "../agent/branch-kind";
-import { AuthDegradeTracker, type DegradeMarker } from "../auth/degrade";
 import { WebPush, type PushPayload } from "../push/webpush";
 import { Fcm } from "../push/fcm";
 import { Apns } from "../push/apns";
@@ -250,9 +250,7 @@ export class Supervisor {
   private readonly pairedHub?: PairedHubStore;
   private readonly onRosterChanged?: (reason: string) => void;
   private readonly envFile?: string;
-  /** Auto-degrade on credential failure (§4.6). Assigned in the constructor — `stateDir` isn't known
-   *  at field-initializer time. Also the read model for "is this machine degraded?" everywhere else. */
-  readonly authDegrade!: AuthDegradeTracker;
+
   private readonly selfPort: number;
   /** Cached self base URL (deep-link target) — discovery shells out to `tailscale`, so cache it. */
   private selfBaseUrlCache?: { url: string | undefined; at: number };
@@ -273,9 +271,6 @@ export class Supervisor {
     this.envFile = cfg.envFile;
     // `(this as …)` — the field is `readonly` for every reader but must be assigned here, after
     // stateDir is known. The push registries aren't constructed yet, so notify lazily through `this`.
-    (this as { authDegrade: AuthDegradeTracker }).authDegrade = new AuthDegradeTracker(cfg.stateDir, (marker) =>
-      this.notifyAuthDegraded(marker),
-    );
     this.store = new SessionStore(cfg.stateDir);
     this.envStore = new EnvironmentStore(cfg.stateDir);
     this.environments = new EnvironmentService({
@@ -344,8 +339,6 @@ export class Supervisor {
       require: (id) => this.require(id),
       budget: () => this.budget(),
       handoffCreate: (a) => this.handoffCreate(a),
-      authDegraded: () => this.authDegrade.degraded(),
-      claimDegradeEpisodeAlert: () => this.authDegrade.claimEpisodeAlert(),
       pushSystemAlert: (title, body, tag) => this.pushSystemAlert(title, body, tag),
       notifyAll: (payload) => {
         void this.webpush.notify(payload);
@@ -700,8 +693,8 @@ export class Supervisor {
   autopilotPlansEvent(cid?: string): AutopilotPlansEvent {
     return this.autopilot.autopilotPlansEvent(cid);
   }
-  startPlanningSession(workUnitId: string, model?: Model, autonomy?: AutonomyPolicy, cid?: string): Promise<AutopilotStartedEvent> {
-    return this.autopilot.startPlanningSession(workUnitId, model, autonomy, cid);
+  startPlanningSession(workUnitId: string, model?: Model, permissionMode?: PermissionMode, cid?: string): Promise<AutopilotStartedEvent> {
+    return this.autopilot.startPlanningSession(workUnitId, model, permissionMode, cid);
   }
 
   // ── Loops (loop-engineering: one surface naming every active loop) ────────────────────
@@ -752,8 +745,8 @@ export class Supervisor {
   clearAutopilot(cid?: string): Promise<AutopilotMaintenanceResultEvent> {
     return this.autopilot.clearAutopilot(cid);
   }
-  startPlan(workUnitId: string, model?: Model, autonomy?: AutonomyPolicy, cid?: string): Promise<AutopilotStartedEvent> {
-    return this.autopilot.startPlan(workUnitId, model, autonomy, cid);
+  startPlan(workUnitId: string, model?: Model, permissionMode?: PermissionMode, cid?: string): Promise<AutopilotStartedEvent> {
+    return this.autopilot.startPlan(workUnitId, model, permissionMode, cid);
   }
   linkPlan(workUnitId: string, sessionId: string, cid?: string): AutopilotStartedEvent {
     return this.autopilot.linkPlan(workUnitId, sessionId, cid);
@@ -958,7 +951,7 @@ export class Supervisor {
       worktree,
       git: await gitStatusAsync(cwd),
       model: cmd.model ?? "opus",
-      autonomy: cmd.autonomy ?? "mostly-autonomous",
+      permissionMode: cmd.permissionMode ?? "bypassPermissions",
       adversarialReview: cmd.adversarialReview ?? false,
       status: "idle",
       createdAt: now(),
@@ -997,7 +990,7 @@ export class Supervisor {
     base?: string;
     title: string;
     model?: Model;
-    autonomy?: AutonomyPolicy;
+    permissionMode?: PermissionMode;
     brief: string;
     // ── Teams: link the new session to a lead as a member (see docs/plans/anvil-team-support.md) ──
     parentId?: string;
@@ -1027,7 +1020,7 @@ export class Supervisor {
         title: a.title,
         environmentId: env?.id,
         model: a.model,
-        autonomy: a.autonomy,
+        permissionMode: a.permissionMode,
       };
     } else {
       if (!a.cwd) throw new BadCommand("cwd is required for an existing-dir handoff");
@@ -1040,7 +1033,7 @@ export class Supervisor {
         title: a.title,
         environmentId: a.environmentId,
         model: a.model,
-        autonomy: a.autonomy,
+        permissionMode: a.permissionMode,
       };
     }
     const session = await this.create(cmd);
@@ -1214,7 +1207,6 @@ export class Supervisor {
   private maybeReflectOnClaudeMd(id: string): void {
     try {
       if (!claudeMdReflectionEnabled()) return;
-      if (this.authDegrade.degraded()) return;
       if (this.reflectedSessions.has(id)) return;
       const s = this.sessions.get(id);
       if (!s) return; // session gone (e.g. killed between call and here)
@@ -1316,13 +1308,6 @@ export class Supervisor {
     // Exactly-once (v4, spec A5): a re-flushed offline send carries the same cid. If we've already
     // applied it, record nothing new and don't run the turn again — the dispatcher re-acks it.
     if (cid && s.isPromptApplied(cid)) return;
-    // Degraded machine (no usable Claude token): stop here with the explicit §4.3 message instead of
-    // letting `buildAgentEnv` throw out through the dispatcher as an opaque command error. The user's
-    // text is deliberately NOT echoed — nothing consumed it, so a bubble with no reply would be a lie.
-    if (this.authDegrade.degraded()) {
-      s.emitError(NO_CLAUDE_TOKEN_ERROR, false);
-      return;
-    }
     if (s.data.archived) {
       s.data.archived = false; // prompting reactivates an archived session
       this.broadcastUpdated(s.data);
@@ -1393,11 +1378,10 @@ export class Supervisor {
     this.ensureDriver(id).prompt(text, inline);
   }
 
-  /** A turn threw. Classify it: two consecutive 401/403-class failures mean the credential is dead, so
-   *  the daemon degrades itself back into the pairing flow rather than failing every future turn the
-   *  same opaque way (§4.6). Anything else (network, timeout, 429) resets the streak. */
+  /** A turn threw. CC owns auth outcomes now (cc plan 4, "defer-to-CC"): the error already
+   *  surfaced in the session; nothing daemon-side to classify. Kept as the drivers' seam. */
   private onTurnError(err: unknown): void {
-    this.authDegrade.recordTurnFailure(err);
+    void err;
   }
 
   /** Get the session's live driver, creating it lazily on first use (arch §6.2). */
@@ -1531,14 +1515,6 @@ export class Supervisor {
 
   /** The auto-degrade notification (HJ-29). Also broadcast on the wire so an OPEN client flips to the
    *  setup takeover immediately, rather than only on its next reload. */
-  private notifyAuthDegraded(marker: DegradeMarker): void {
-    this.broadcastAuthState();
-    this.pushSystemAlert(
-      "Anvil can't reach Claude",
-      `This machine's Claude login stopped working (${marker.reason}). Turns are paused until it's re-paired.`,
-      "auth-degraded",
-    );
-  }
 
   /** Tell every connected client this machine's auth/pairing state changed, so the setup takeover can
    *  appear (degraded) or disappear (paired) live. */
@@ -1566,9 +1542,10 @@ export class Supervisor {
     this.persist();
     this.broadcastUpdated(s.data);
   }
-  setAutonomy(id: string, policy: AutonomyPolicy): void {
+  setPermissionMode(id: string, mode: PermissionMode): void {
+    if (!isPermissionMode(mode)) return; // ignore junk rather than pass it to the CLI
     const s = this.require(id);
-    s.data.autonomy = policy;
+    s.data.permissionMode = mode;
     s.data.lastActivityAt = now();
     this.persist();
     this.broadcastUpdated(s.data);
@@ -1781,7 +1758,7 @@ export class Supervisor {
       cwd: process.env.HOME ?? this.store.worktreeRoot(),
       source: "existing-dir",
       model: "opus",
-      autonomy: "mostly-autonomous",
+      permissionMode: "bypassPermissions",
       status: "idle",
       createdAt: now(),
       lastActivityAt: now(),
@@ -2002,9 +1979,6 @@ export class Supervisor {
   /** Per-turn: refresh the shared rate-limit gauge from the real plan windows, broadcast it, and
    *  advise once when the weekly window nears the cap. */
   private onAgentResult(sessionId: string, usage: TurnUsage): void {
-    // A turn that produced a result reached Anthropic with a working credential — break any
-    // consecutive-auth-failure streak so a 401 hours ago can't pair up with one now (§4.6).
-    this.authDegrade.recordTurnSuccess();
     // The agent may have committed, switched/created a branch, or left new changes this turn —
     // refresh git so the worktree panel and session-list badge stay current without a manual
     // "status" press. Local-only and a no-op (no broadcast) when nothing changed. [BE2-5] Async +

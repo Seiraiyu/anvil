@@ -2,6 +2,7 @@ import type { CanUseTool, PermissionResult } from "@anthropic-ai/claude-agent-sd
 import type { Question, QuestionAnswer } from "@protocol";
 import { newId } from "../util/ids";
 import type { Session } from "../session/session";
+import { askPermission, type PermissionBroker } from "./permissions";
 
 /**
  * AskUserQuestion plumbing (arch §6.6).
@@ -98,12 +99,17 @@ export function normalizeQuestions(raw: unknown): Question[] {
  * question in the broker, surface it to clients, and turn the answer into the PermissionResult whose
  * `updatedInput` the CLI re-runs the tool with.
  */
-export function makeCanUseTool(session: Session, broker: QuestionBroker): CanUseTool {
+export function makeCanUseTool(session: Session, broker: QuestionBroker, permBroker: PermissionBroker): CanUseTool {
   return async (toolName, input): Promise<PermissionResult> => {
-    // Only AskUserQuestion ever reaches canUseTool: the hook resolves all other tools to allow/deny,
-    // which short-circuits before this callback. Anything else here was already vetted by the hook,
-    // so allow it through unchanged rather than second-guessing it.
-    if (toolName !== "AskUserQuestion") return { behavior: "allow", updatedInput: input };
+    // CC-native since cc plan 4: the SDK engine (not a daemon policy) decides what prompts, and
+    // every prompt-worthy tool reaches this callback. Non-question asks park in the shared
+    // permission path — the same brokers/cards the CLI transport's approve tool uses.
+    if (toolName !== "AskUserQuestion") {
+      const out = await askPermission(session, permBroker, toolName, input);
+      return out.behavior === "allow"
+        ? { behavior: "allow", updatedInput: out.updatedInput }
+        : { behavior: "deny", message: out.message };
+    }
 
     const questions = normalizeQuestions(input.questions);
     // No parseable questions → let the CLI's own tool run produce its "did not answer" result so the

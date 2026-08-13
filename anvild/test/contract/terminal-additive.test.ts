@@ -13,5 +13,7 @@ test("terminal.* messages compile without termId; version stays 4", () => {
   const data: TerminalDataEvent = { v: PROTOCOL_VERSION, type: "terminal.data", ts: "t", sessionId: "s", seq: 1, data: "" };
   const exit: TerminalExitEvent = { v: PROTOCOL_VERSION, type: "terminal.exit", ts: "t", sessionId: "s", seq: 2, code: 0 };
   for (const m of [open, input, resize, close, data, exit]) expect(m.termId).toBeUndefined();
-  expect(PROTOCOL_VERSION).toBe(4);
+  // v5 came from the cc-cli-transport permissionMode rename (§4.7 delta 1), NOT from terminal
+  // fields — those remain additive, which is what this test actually guards.
+  expect(PROTOCOL_VERSION).toBe(5);
 });

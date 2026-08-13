@@ -84,7 +84,7 @@ test("an uploaded image survives the wire: shows in message.user AND reaches Cla
       });
     ws.addEventListener("message", (ev) => events.push(JSON.parse(String((ev as MessageEvent).data))));
     await new Promise<void>((r) => ws.addEventListener("open", () => r()));
-    ws.send(stamp({ type: "session.create", cid: "c", source: "existing-dir", cwd: dir, model: "sonnet", autonomy: "mostly-autonomous" }));
+    ws.send(stamp({ type: "session.create", cid: "c", source: "existing-dir", cwd: dir, model: "sonnet", permissionMode: "bypassPermissions" }));
     const created = await waitFor("session.created");
     const sessionId = created.session.id as string;
 
@@ -151,7 +151,7 @@ test("a non-image file attachment lands in the chat AND its contents reach Claud
       });
     ws.addEventListener("message", (ev) => events.push(JSON.parse(String((ev as MessageEvent).data))));
     await new Promise<void>((r) => ws.addEventListener("open", () => r()));
-    ws.send(stamp({ type: "session.create", cid: "c", source: "existing-dir", cwd: dir, model: "sonnet", autonomy: "mostly-autonomous" }));
+    ws.send(stamp({ type: "session.create", cid: "c", source: "existing-dir", cwd: dir, model: "sonnet", permissionMode: "bypassPermissions" }));
     const created = await waitFor("session.created");
     const sessionId = created.session.id as string;
 

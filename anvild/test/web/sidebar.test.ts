@@ -40,7 +40,7 @@ function mkSession(id: string): Session {
     model: "sonnet",
     source: "existing-repo",
     cwd: "/",
-    autonomy: "mostly-autonomous",
+    permissionMode: "bypassPermissions",
     createdAt: `2026-01-01T00:00:${String(++seq).padStart(2, "0")}Z`,
     lastActivityAt: "2026-01-01T00:00:00Z",
   } as unknown as Session;

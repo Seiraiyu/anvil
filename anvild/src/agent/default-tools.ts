@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { createSdkMcpServer, tool, type McpSdkServerConfigWithInstance } from "@anthropic-ai/claude-agent-sdk";
-import type { AutonomyPolicy, Environment, Model, Session as SessionData, SessionSource } from "@protocol";
+import type { Environment, Model, PermissionMode, Session as SessionData, SessionSource } from "@protocol";
 
 /**
  * In-process MCP tools given ONLY to the persistent "concierge" default chat (§0.6). They let
@@ -25,7 +25,7 @@ export interface DefaultToolDeps {
     base?: string;
     title: string;
     model?: Model;
-    autonomy?: AutonomyPolicy;
+    permissionMode?: PermissionMode;
     brief: string;
     // ── Teams: stamp the new session as a member of a lead (see docs/plans/anvil-team-support.md) ──
     parentId?: string;
@@ -44,7 +44,7 @@ function summarize(s: SessionData) {
     title: s.title,
     status: s.status,
     model: s.model,
-    autonomy: s.autonomy,
+    permissionMode: s.permissionMode,
     environmentId: s.environmentId,
     source: s.source,
     archived: !!s.archived,
@@ -120,7 +120,7 @@ export function buildDefaultToolsServer(deps: DefaultToolDeps): McpSdkServerConf
           base: z.string().optional().describe("Base branch/commit for the worktree (default: the env's default base)."),
           title: z.string().describe("Short human title for the session (also used as the branch slug)."),
           model: z.enum(["opus", "sonnet"]).optional().describe("Model for the new session (default opus)."),
-          autonomy: z
+          permissionMode: z
             .enum(["mostly-autonomous", "allowlist", "prompt-all", "bypass"])
             .optional()
             .describe("Permission posture for the new session (default mostly-autonomous)."),
@@ -137,7 +137,7 @@ export function buildDefaultToolsServer(deps: DefaultToolDeps): McpSdkServerConf
               base: a.base,
               title: a.title,
               model: a.model as Model | undefined,
-              autonomy: a.autonomy as AutonomyPolicy | undefined,
+              permissionMode: a.permissionMode as PermissionMode | undefined,
               brief: a.brief,
             });
             return ok(`Created and started session "${title}" (${id}) at ${cwd}. It is now working on the brief.`);

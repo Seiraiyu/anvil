@@ -12,7 +12,7 @@
  */
 import {
   PROTOCOL_VERSION,
-  type AutonomyPolicy,
+  type PermissionMode,
   type AutopilotMaintenanceResultEvent,
   type AutopilotPipelineMetricsEvent,
   type AutopilotPlanInfo,
@@ -107,14 +107,12 @@ export interface AutopilotDeps {
     source: "fresh-worktree";
     title: string;
     model?: Model | undefined;
-    autonomy?: AutonomyPolicy | undefined;
+    permissionMode?: PermissionMode | undefined;
     brief: string;
     workUnitId?: string | undefined;
     workUnitRole?: "planner" | undefined;
   }) => { id: string; title: string; cwd: string } | Promise<{ id: string; title: string; cwd: string }>;
   /** Degraded-machine read model (§4.6) — suppresses the scheduled run with one alert per episode. */
-  authDegraded: () => boolean;
-  claimDegradeEpisodeAlert: () => boolean;
   pushSystemAlert: (title: string, body: string, tag: string) => void;
   /** Fan a push out to every registry (webpush + FCM + APNs). */
   notifyAll: (payload: PushPayload) => void;
@@ -176,18 +174,6 @@ export class AutopilotService {
   private async maybeRunScheduled(): Promise<void> {
     const sched = this.autopilotSchedule.get();
     if (this.autopilotRunning || !scheduledFireDue(sched, new Date(), SCHEDULE_RUN_WINDOW_MS, sched.lastRunAt)) return;
-    // Degraded machine: every unit this run planned would fail at spawn. Suppress the run rather than
-    // manufacturing a nightly wall of auth errors — but say so ONCE per degraded episode, so it's not a
-    // silent stop either (HJ-12/HJ-29). Stamp the window as run so the 5-min ticks don't re-alert.
-    if (this.deps.authDegraded()) {
-      this.autopilotSchedule.markRun(now());
-      this.broadcastSchedule();
-      if (this.deps.claimDegradeEpisodeAlert()) {
-        console.warn("[anvild] autopilot: scheduled run suppressed — this machine has no usable Claude token.");
-        this.deps.pushSystemAlert("Autopilot paused", "This machine has no Claude login, so the scheduled run was skipped. Pair it with your fleet to resume.", "auth-degraded");
-      }
-      return;
-    }
     // Stamp the run NOW so a slow run isn't re-triggered on the next 5-min tick, and so a hard error
     // (Todoist down, no linked envs) doesn't hammer — it waits for the next scheduled window.
     this.autopilotSchedule.markRun(now());
@@ -331,7 +317,7 @@ export class AutopilotService {
    * is agreed it can implement here, or call `run_pipeline` to hand off to the autonomous loop. Works on
    * held (needs-clarification) units too — this is how their open questions get answered.
    */
-  async startPlanningSession(workUnitId: string, model?: Model, autonomy?: AutonomyPolicy, cid?: string): Promise<AutopilotStartedEvent> {
+  async startPlanningSession(workUnitId: string, model?: Model, permissionMode?: PermissionMode, cid?: string): Promise<AutopilotStartedEvent> {
     const u = this.workUnits.get(workUnitId);
     if (!u) throw new BadCommand(`no such work unit: ${workUnitId}`);
     if (u.sessionId && this.deps.hasSession(u.sessionId)) throw new BadCommand("this plan already has a live session");
@@ -354,7 +340,7 @@ export class AutopilotService {
       title: u.title,
       model: model ?? "opus",
       // Interactive by default: it should ask the open questions and confirm the design, not blast ahead.
-      autonomy: autonomy ?? "mostly-autonomous",
+      permissionMode: permissionMode ?? "default",
       brief: buildPlanningBrief(u, todoistPrompt),
       workUnitId: u.id,
       workUnitRole: "planner",
@@ -605,11 +591,11 @@ export class AutopilotService {
     return { v: PROTOCOL_VERSION, type: "autopilot.maintenance.result", ts: now(), ...(cid ? { cid } : {}), op: "clear", tasksCleared, unitsRemoved: units.length };
   }
 
-  /** Go: create a fresh-worktree session seeded with the plan and start it. Autonomy defaults to
+  /** Go: create a fresh-worktree session seeded with the plan and start it. Permission mode defaults to
    *  `bypass` so the work runs without stalling on a permission prompt. The card then leaves the
    *  pending grid (sessionId set + status building). */
   // [BE2-2] Async: Go spawns a fresh-worktree session whose creation runs async git (base-sync fetch).
-  async startPlan(workUnitId: string, model?: Model, autonomy?: AutonomyPolicy, cid?: string): Promise<AutopilotStartedEvent> {
+  async startPlan(workUnitId: string, model?: Model, permissionMode?: PermissionMode, cid?: string): Promise<AutopilotStartedEvent> {
     const u = this.workUnits.get(workUnitId);
     if (!u) throw new BadCommand(`no such work unit: ${workUnitId}`);
     if (u.sessionId && this.deps.hasSession(u.sessionId)) throw new BadCommand("this plan already has a running session");
@@ -631,7 +617,7 @@ export class AutopilotService {
       source: "fresh-worktree",
       title: u.title,
       model: model ?? "opus",
-      autonomy: autonomy ?? "bypass",
+      permissionMode: permissionMode ?? "bypassPermissions",
       brief,
     });
     // Clear any auto-start hold — a human is deliberately starting it now — and record the seeded goal.

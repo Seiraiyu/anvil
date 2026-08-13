@@ -1,5 +1,5 @@
 {
-  "protocolVersion": 4,
+  "protocolVersion": 5,
   "wireTypes": [
     "ack",
     "assistant.delta",
@@ -103,8 +103,8 @@
     "session.new_topic",
     "session.reset",
     "session.set_adversarial_review",
-    "session.set_autonomy",
     "session.set_model",
+    "session.set_permission_mode",
     "session.unarchive",
     "session.updated",
     "status",

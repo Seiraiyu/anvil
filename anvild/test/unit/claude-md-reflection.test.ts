@@ -70,14 +70,12 @@ function harness(nextResult: Partial<GitResultEvent>) {
     sessions: Map<string, unknown>;
     drivers: Map<string, unknown>;
     gitProjection: { gitOp: (c: GitCmd) => GitResultEvent };
-    authDegrade: { degraded: () => boolean };
   };
   anySup.sessions.set("s1", { data: {} }); // plain interactive session (no teamRole/workUnitId)
   anySup.drivers.set("s1", { prompt: (t: string) => prompts.push(t) });
   anySup.gitProjection = {
     gitOp: (c) => ({ v: PROTOCOL_VERSION, type: "git.result", ts: "t", sessionId: c.sessionId, op: c.op, ok: true, output: "", ...nextResult }),
   };
-  anySup.authDegrade = { degraded: () => false }; // usable token by default; the degraded test overrides
   return { sup, prompts, anySup, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
@@ -137,8 +135,7 @@ test("team and autopilot work-unit sessions are skipped — interactive sessions
   }
 });
 
-test("the env off-switch and the degraded gate both suppress the reflection", () => {
-  // env off
+test("the env off-switch suppresses the reflection", () => {
   process.env[ENV_KEY] = "0";
   const off = harness({ ok: true, url: "https://x/pull/1" });
   try {
@@ -146,16 +143,7 @@ test("the env off-switch and the degraded gate both suppress the reflection", ()
     expect(off.prompts).toHaveLength(0);
   } finally {
     off.cleanup();
-  }
-  // degraded (no usable token) — even with the feature on
-  delete process.env[ENV_KEY];
-  const deg = harness({ ok: true, url: "https://x/pull/1" });
-  deg.anySup.authDegrade = { degraded: () => true };
-  try {
-    deg.sup.gitOp(gitCmd("create-pr"));
-    expect(deg.prompts).toHaveLength(0);
-  } finally {
-    deg.cleanup();
+    delete process.env[ENV_KEY];
   }
 });
 
