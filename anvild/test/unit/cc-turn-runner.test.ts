@@ -17,8 +17,8 @@ import { test, expect } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { TurnRunner, type TurnRunnerDeps } from "../../src/cc/turn-runner";
-import type { TurnUsage } from "../../src/agent/driver";
+import { TurnRunner, isResumeRejectedError, type TurnRunnerDeps } from "../../src/cc/turn-runner";
+import type { TurnUsage } from "../../src/cc/turn-runner";
 import { PassthroughRenderer } from "../../src/render/markdown";
 import type { Session } from "../../src/session/session";
 
@@ -205,6 +205,17 @@ test("crash mid-line: flushed tail is parsed, error surfaces, status resets", as
   expect(errors[0]).toContain("exit");
   expect(turnErr).toBeDefined();
   await until(() => data.status === "idle");
+});
+
+test("isResumeRejectedError matches session-not-found / auth-rejection wording", () => {
+  // Ported from the SDK driver suite (multi-account §5.3/Task 23; driver deleted in cc plan 7).
+  expect(isResumeRejectedError(new Error("session not found"))).toBe(true);
+  expect(isResumeRejectedError(new Error("Session does not exist"))).toBe(true);
+  expect(isResumeRejectedError(new Error("no conversation found for that id"))).toBe(true);
+  expect(isResumeRejectedError(new Error("401 Unauthorized"))).toBe(true);
+  expect(isResumeRejectedError(new Error("403 Forbidden"))).toBe(true);
+  expect(isResumeRejectedError(new Error("network timeout"))).toBe(false);
+  expect(isResumeRejectedError(new Error("ENOENT: no such file or directory"))).toBe(false);
 });
 
 test("rejected --resume clears the session id and drops the fresh-context divider", async () => {

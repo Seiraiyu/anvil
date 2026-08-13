@@ -1,4 +1,3 @@
-import type { HookCallback, PreToolUseHookInput } from "@anthropic-ai/claude-agent-sdk";
 import type { PermissionDecision, PermissionSuggestion } from "@protocol";
 import { newId } from "../util/ids";
 import type { Session } from "../session/session";
@@ -60,43 +59,14 @@ export const SUGGESTIONS = (tool: string): PermissionSuggestion[] => [
  */
 export type PlanProposedHook = (plan: string) => Promise<void>;
 
-/**
- * PreToolUse hook for the (legacy, until Plan 8) SDK transport — CC-NATIVE since cc plan 4:
- * the old autonomy-policy engine and its danger table are gone. The CLI's own permission engine decides
- * what prompts; prompt-worthy calls surface through `canUseTool` (agent/questions.ts) → the
- * brokers → every device. This hook only:
- *   - runs the advisory adversarial plan review when the model calls ExitPlanMode;
- *   - lets everything fall through with a bare `continue` so the engine's verdict stands.
- */
-export function makePreToolUseHook(
-  session: Session,
-  _broker: PermissionBroker,
-  onPlanProposed?: PlanProposedHook,
-): HookCallback {
-  return async (input) => {
-    const i = input as PreToolUseHookInput;
-    if (i.tool_name === "ExitPlanMode" && onPlanProposed) {
-      const toolInput = (i.tool_input ?? {}) as Record<string, unknown>;
-      try {
-        await onPlanProposed(typeof toolInput.plan === "string" ? toolInput.plan : "");
-      } catch {
-        /* advisory only — a panel failure must never block the plan */
-      }
-    }
-    void session;
-    return { continue: true };
-  };
-}
-
 export type AskPermissionResult =
   | { behavior: "allow"; updatedInput: Record<string, unknown> }
   | { behavior: "deny"; message: string };
 
 /**
- * Park one prompt-worthy tool call for a human (arch §6.6) — the shared core of BOTH transports:
- * the CLI path's MCP approve tool (cc/permission-server.ts) and the SDK path's canUseTool
- * (agent/questions.ts). Fans the permission.request card to every device and holds indefinitely
- * (pocket-phone is the product); session.reset force-resolves wedged prompts.
+ * Park one prompt-worthy tool call for a human (arch §6.6) — the core of the CLI transport's MCP
+ * approve tool (cc/permission-server.ts). Fans the permission.request card to every device and
+ * holds indefinitely (pocket-phone is the product); session.reset force-resolves wedged prompts.
  */
 export async function askPermission(
   session: Session,

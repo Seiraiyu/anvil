@@ -11,7 +11,7 @@ import { judgeGoal } from "../../src/agent/goal";
 import { pickIcon } from "../../src/agent/icon";
 
 const FAKE_CC = join(import.meta.dir, "..", "helpers", "fake-cc.ts");
-const FIX = (name: string) => join(import.meta.dir, "..", "fixtures", "cc", name);
+const FIX = (name: string) => join(import.meta.dir, "..", "fixtures", "oneshot", name);
 const ENV = { PATH: process.env.PATH ?? "" };
 const cc = (fixture: string, extra: Record<string, string> = {}) => ({
   ccCommand: ["bun", FAKE_CC],

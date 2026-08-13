@@ -36,8 +36,6 @@ export function askUserQuestionToolIds(m: CCMessage): string[] {
  * Pure translator: one `CCMessage` → the session-scoped events to emit (arch §6.2).
  * This is the CLI-drift containment point — keep all stream-json-shape knowledge here and
  * fixture-test it offline (test/unit/map.test.ts; shapes pinned by the golden recordings).
- * The SDK path (driver.ts, until Plan 8) passes structurally-identical SDKMessages through
- * a cast — the wire shapes are the same stream-json.
  */
 export function mapMessage(m: CCMessage, renderer: MarkdownRenderer): SessionEventBody[] {
   return stampCcUuid(m, mapMessageBodies(m, renderer));

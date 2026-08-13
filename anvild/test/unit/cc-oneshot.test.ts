@@ -13,7 +13,7 @@ import { CLAUDE, GLM } from "../../src/agent/model-roster";
 import { OPENROUTER_ANTHROPIC_BASE_URL } from "../../src/agent/env";
 
 const FAKE_CC = join(import.meta.dir, "..", "helpers", "fake-cc.ts");
-const PLAN_FIXTURE = join(import.meta.dir, "..", "fixtures", "cc", "oneshot-plan.ndjson");
+const PLAN_FIXTURE = join(import.meta.dir, "..", "fixtures", "oneshot", "oneshot-plan.ndjson");
 const CANNED_PLAN = "# Plan\n\nChange src/x.ts to do the thing.";
 
 const ORIG = { c: process.env.CLAUDE_CODE_OAUTH_TOKEN, o: process.env.OPENROUTER_API_KEY };

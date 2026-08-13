@@ -17,25 +17,57 @@
  * ride the same per-spawn config (plans 4–5); config is fully CC-native (design §4.3).
  */
 import { tmpdir } from "node:os";
-import type { CommandInfo, ContentBlock, Model } from "@protocol";
+import type { CommandInfo, ContentBlock, ContextUsage, Model } from "@protocol";
 import { sdkModelId } from "../agent/models";
-import { userMessage, type InlineAttachment } from "../agent/input-queue";
+import { userMessage, type InlineAttachment } from "../agent/attachments";
 import { askUserQuestionToolIds, extractResultUsage, extractSessionId, mapMessage } from "../agent/map";
 import { buildCommandInfo } from "../agent/skills";
 import { buildFileOffer, deliverablePath, maybeTaildrop } from "../agent/file-offer";
-import { isResumeRejectedError, type ResultRecorder } from "../agent/driver";
 import { GOAL_TRANSCRIPT_LINES } from "../agent/goal";
 import { NdjsonSplitter, parseCCLine, type CCMessage } from "./stream";
 import { spawnInGroup, killGroup, type Group } from "../session/procgroup";
 import type { Session } from "../session/session";
 import type { MarkdownRenderer } from "../render/markdown";
 
-/** The supervisor-facing driver surface — AgentDriver (SDK) and TurnRunner (CLI) both satisfy it. */
+/** The supervisor-facing driver surface (formerly shared with the SDK AgentDriver, gone in plan 7). */
 export interface SessionDriver {
   prompt(text: string, attachments?: InlineAttachment[]): void;
   interrupt(): Promise<void>;
   setModel(model: Model): Promise<void>;
   stop(): Promise<void>;
+}
+
+/** What a completed turn reports for the rate-limit gauge (arch §3). */
+export interface TurnUsage {
+  model: Model;
+  costUsd: number; // the turn's USD-equivalent cost (informational)
+  /** The CLI's `rate_limits` payload (opaque here), or null when unavailable this turn. */
+  rateLimits: unknown;
+  subscriptionType: string | null; // "max" | "pro" | … | null (API-key / 3P session)
+  /** Live context-window occupancy after this turn (§context), or null if the CLI didn't report it. */
+  contextUsage: ContextUsage | null;
+}
+/** Called once per completed turn so the supervisor can refresh the shared rate-limit gauge. */
+export type ResultRecorder = (usage: TurnUsage) => void;
+
+/**
+ * Best-effort detection of a `--resume` rejected by the CLI (multi-account §5.3/Task 1 spike).
+ * The 2026-07-26 spike found cross-account resume actually SUCCEEDS for the two accounts tested, so
+ * this path is the rare/defensive case, not the common one — but a revoked/expired session, a
+ * deleted conversation on Anthropic's side, or some other account pairing could still hit it, and an
+ * opaque crash there would be a much worse experience than a friendly "started a fresh context".
+ * Matches on the shape Claude Code's CLI is documented to use for a missing/foreign session id
+ * ("session not found/does not exist") plus generic auth-rejection wording, rather than a single
+ * exact string — refine this pattern if a real acceptance run ever observes the actual text.
+ */
+export function isResumeRejectedError(e: unknown): boolean {
+  const msg = (e instanceof Error ? e.message : String(e)).toLowerCase();
+  return (
+    msg.includes("no conversation") ||
+    (msg.includes("session") && (msg.includes("not found") || msg.includes("does not exist"))) ||
+    msg.includes("unauthorized") ||
+    msg.includes("forbidden")
+  );
 }
 
 export type TurnState = "idle" | "spawning" | "streaming" | "settling" | "error";

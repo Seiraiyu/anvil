@@ -121,6 +121,25 @@ test("AskUserQuestion routes to the QuestionBroker and reproduces the answers sh
   expect(out.updatedInput.questions).toEqual(input.questions); // original input round-trips
 });
 
+test("multiSelect answers become an array; free-text becomes annotations", async () => {
+  // Ported from the SDK makeCanUseTool suite (deleted in cc plan 7 with the driver).
+  const { s, questions } = fakeSession("s1");
+  const d = deps(s);
+  const input = {
+    questions: [{ question: "Which library?", header: "Library", options: [{ label: "date-fns" }, { label: "luxon" }], multiSelect: true }],
+  };
+  const pending = callApprove(d, { tool_name: "AskUserQuestion", input });
+  await new Promise((r) => setTimeout(r, 10));
+  d.questionBroker.resolve(questions[0]!.requestId, {
+    cancelled: false,
+    answers: [{ question: "Which library?", labels: ["date-fns", "luxon"], notes: "or moment" }],
+  });
+  const out = await (await pending);
+  expect(out.behavior).toBe("allow");
+  expect(out.updatedInput.answers).toEqual({ "Which library?": ["date-fns", "luxon"] });
+  expect(out.updatedInput.annotations).toEqual({ "Which library?": { notes: "or moment" } });
+});
+
 test("cancelled/skipped question allows with the ORIGINAL input (native skip semantics)", async () => {
   const { s, questions } = fakeSession("s1");
   const d = deps(s);

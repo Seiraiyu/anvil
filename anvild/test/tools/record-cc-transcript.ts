@@ -17,7 +17,7 @@
 import { cpSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { userMessage } from "../../src/agent/input-queue";
+import { userMessage } from "../../src/agent/attachments";
 import { claudeConfigDir, projectSlug, readTranscript, isMessageLine } from "../../src/cc/transcript";
 import { cttyArgv } from "../../src/session/terminal-manager";
 

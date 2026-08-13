@@ -25,7 +25,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { buildAgentEnv } from "../agent/env";
-import { userMessage } from "../agent/input-queue";
+import { userMessage } from "../agent/attachments";
 import type { ModelSpec } from "../agent/model-roster";
 import { renderGuardHookScript } from "../agent/pipeline-guard";
 import type { AccountStore } from "../auth/accounts";

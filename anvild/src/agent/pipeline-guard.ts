@@ -1,4 +1,3 @@
-import type { HookCallback, PreToolUseHookInput } from "@anthropic-ai/claude-agent-sdk";
 import { resolve } from "node:path";
 
 /**
@@ -137,25 +136,3 @@ process.stdin.on("end", () => {
 `;
 }
 
-/** PreToolUse hook that hard-denies dangerous tools in an unattended pipeline run. */
-export function makePipelineGuardHook(cwd?: string): HookCallback {
-  return async (input) => {
-    const i = input as PreToolUseHookInput;
-    const tool = i.tool_name;
-    const toolInput = (i.tool_input ?? {}) as Record<string, unknown>;
-
-    // AskUserQuestion has no answer path in an unattended run; let it fall through so the SDK's
-    // default handling applies rather than a fabricated decision (mirrors the interactive gate).
-    if (tool === "AskUserQuestion") return { continue: true };
-
-    const { behavior, reason } = pipelineGuardVerdict(tool, toolInput, cwd);
-    return {
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: behavior,
-        permissionDecisionReason:
-          behavior === "deny" ? `pipeline denied — ${reason}` : reason,
-      },
-    };
-  };
-}

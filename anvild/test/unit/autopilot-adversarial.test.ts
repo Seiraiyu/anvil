@@ -7,7 +7,7 @@ import { planUnit } from "../../src/integrations/autopilot";
 // hazard: the spawn is pointed at the REAL fake-cc child, whose fixture replays an ExitPlanMode
 // tool_use (the plan) and a result wrap-up, exactly like the recordings.
 const FAKE_CC = join(import.meta.dir, "..", "helpers", "fake-cc.ts");
-const PLAN_FIXTURE = join(import.meta.dir, "..", "fixtures", "cc", "oneshot-plan.ndjson");
+const PLAN_FIXTURE = join(import.meta.dir, "..", "fixtures", "oneshot", "oneshot-plan.ndjson");
 const CANNED_PLAN = "# Plan\n\nChange src/x.ts to do the thing.";
 const CC = { ccCommand: ["bun", FAKE_CC], extraEnv: { FAKE_CC_FIXTURE: PLAN_FIXTURE } };
 

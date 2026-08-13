@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Supervisor } from "../../src/session/supervisor";
 import { ConnectionRegistry } from "../../src/server/registry";
-import type { GoalVerdict } from "../../src/agent/goal";
+import { GOAL_MAX_ITERATIONS, type GoalVerdict } from "../../src/agent/goal";
 
 function harness(judge?: (c: string, t: string) => Promise<GoalVerdict>) {
   const goalJudge = async (c: string, t: string): Promise<GoalVerdict> => (judge ? judge(c, t) : { met: true, reason: "" });
@@ -86,13 +86,33 @@ test("stop hook: no goal ⇒ {}; unmet ⇒ block with reason; met ⇒ {} and goa
   expect(s.data.goal).toBeUndefined();
 });
 
-test("stop hook fails open when the judge throws", async () => {
+test("stop hook fails open when the judge throws, and does NOT consume an iteration", async () => {
   const { sup } = harness(async () => {
     throw new Error("judge unreachable");
   });
   const s = await sup.create({ v: 5, ts: "t", type: "session.create", source: "existing-dir", cwd: mkdtempSync(join(tmpdir(), "anvil-cc-ep-cwd2-")) } as never);
-  s.data.goal = { condition: "x", iterations: 0, setAt: "t" } as never;
+  s.data.goal = { condition: "x", iterations: 4, setAt: "t" } as never;
   expect((await stopHook(sup, s.data.id)).body).toEqual({}); // D6: never trap the session
+  expect((s.data.goal as { iterations: number }).iterations).toBe(4); // unchanged, still armed
+});
+
+test("stop hook: paused goal is a free no-op; the ceiling clears WITHOUT calling the judge", async () => {
+  // Ported from the SDK makeStopHook suite (deleted in cc plan 7 with the driver).
+  let judged = 0;
+  const { sup } = harness(async () => {
+    judged++;
+    return { met: false, reason: "x" };
+  });
+  const s = await sup.create({ v: 5, ts: "t", type: "session.create", source: "existing-dir", cwd: mkdtempSync(join(tmpdir(), "anvil-cc-ep-cwd4-")) } as never);
+
+  s.data.goal = { condition: "c", iterations: 0, paused: true, setAt: "t" } as never;
+  expect((await stopHook(sup, s.data.id)).body).toEqual({});
+  expect(judged).toBe(0);
+
+  s.data.goal = { condition: "c", iterations: GOAL_MAX_ITERATIONS, lastReason: "still red", setAt: "t" } as never;
+  expect((await stopHook(sup, s.data.id)).body).toEqual({});
+  expect(s.data.goal).toBeUndefined(); // abandoned at the ceiling
+  expect(judged).toBe(0);
 });
 
 test("both endpoints refuse a bad bearer", async () => {

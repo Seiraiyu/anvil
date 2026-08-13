@@ -62,14 +62,12 @@ import { SessionStore } from "./store";
 import { TerminalManager, type SpawnTerminal } from "./terminal-manager";
 import { FileWatchManager } from "./file-watch-manager";
 import { createWorktree, gitStatus, gitStatusAsync, recreateWorktree, removeWorktree, worktreeHealth } from "./worktree";
-import { AgentDriver, type TurnUsage } from "../agent/driver";
-import { TurnRunner, resolveCcCommand, type SessionDriver } from "../cc/turn-runner";
+import { TurnRunner, resolveCcCommand, type SessionDriver, type TurnUsage } from "../cc/turn-runner";
 import { NEW_TOPIC_DIVIDER_LABEL, reconcileTranscript } from "../cc/reconcile";
 import { transcriptPath } from "../cc/transcript";
 import { CcMcpConfig, CC_PERMISSION_TOOL } from "../cc/mcp-config";
 import { handleCcMcp } from "../cc/permission-server";
 import { handleToolServer, type AnvilToolServer } from "../cc/tool-host";
-import { skillPlugins } from "../agent/skills";
 import type { PlanProposedHook } from "../agent/permissions";
 import { buildDefaultToolsServer, DEFAULT_MCP_SERVER_NAME, DEFAULT_TOOL_IDS } from "../agent/default-tools";
 import { TEAM_MCP_SERVER_NAME, TEAM_TOOL_IDS } from "../agent/team-tools";
@@ -1484,69 +1482,37 @@ export class Supervisor {
     }
   }
 
-  /** Get the session's live driver, creating it lazily on first use (arch §6.2). */
+  /** Get the session's live driver, creating it lazily on first use (arch §6.2). CLI-direct is
+   *  the ONLY transport since cc plan 7 (the SDK AgentDriver and its ANVIL_CC_DIRECT opt-in flag
+   *  are gone — flag-flip pulled forward from plan 8, decision 2026-08-13). */
   private ensureDriver(id: string): SessionDriver {
     let driver = this.drivers.get(id);
     if (!driver) {
       const s = this.require(id);
-      // CLI-direct transport (cc-cli-transport plan 3), opt-in per daemon: core sessions ride the
-      // spawned CC CLI instead of the Agent SDK. Permission brokering + daemon MCP tools join in
-      // Plans 4–5; until then this path is for core create/converse/interrupt/resume/model flows.
-      if (process.env.ANVIL_CC_DIRECT === "1") {
-        const runner = new TurnRunner({
-          session: s,
-          renderer: this.renderer,
-          env: this.agentEnv(s),
-          onResult: (usage) => this.onAgentResult(id, usage),
-          onCommands: (commands) => this.onSessionCommands(id, commands),
-          onTurnError: (err) => this.onTurnError(err),
-          // Disk is truth (cc plan 6 §4.9): a turn that ended without a result may have
-          // landed more in the transcript than the stream delivered — heal immediately.
-          onAbnormalEnd: () => this.reconcileFromTranscript(id, "abnormal turn end"),
-          // The daemon's approve tool answers everything CC's engine would prompt for — including
-          // AskUserQuestion (spike finding c) — and the session's role tool server + the goal
-          // Stop hook ride the same per-spawn config, so bearer rotations and role changes land.
-          permissionArgs: () => {
-            const overlay = this.ccMcpCfg.writeSettingsOverlay(id, { goalStopHook: true });
-            const ids = this.ccToolIdsFor(s);
-            return [
-              "--mcp-config", this.ccMcpCfg.writeConfig(id, this.ccToolServerFor(s) ? [this.ccToolServerFor(s)!.name] : []),
-              "--permission-prompt-tool", CC_PERMISSION_TOOL,
-              ...(ids.length ? ["--allowedTools", ids.join(",")] : []),
-              ...(overlay ? ["--settings", overlay] : []),
-            ];
-          },
-        });
-        this.drivers.set(id, runner);
-        return runner;
-      }
-      const isDefault = s.data.isDefault === true;
-      const isLead = s.data.teamRole === "lead";
-      const isMember = s.data.teamRole === "member" && !!s.data.parentId;
-      const isPlanner = s.data.workUnitRole === "planner" && !!s.data.workUnitId;
-      driver = new AgentDriver(
-        s,
-        this.renderer,
-        this.broker,
-        this.questionBroker,
-        this.agentEnv(s),
-        (usage) => this.onAgentResult(id, usage),
-        // cc plan 5: the anvil tool servers are daemon-hosted MCP now (ccSessionArgs wires them
-        // for the CLI transport). The legacy SDK path runs without them until Plan 8 deletes it.
-        undefined,
-        undefined,
-        this.planReviewer(s),
-        undefined, // queryFn — keep the SDK default
-        skillPlugins({ cwd: s.data.cwd, sessionId: id, stateDir: this.stateDir }),
-        (commands) => this.onSessionCommands(id, commands),
-        (err) => this.onTurnError(err),
-        (met, goal) => this.onGoalResolved(id, met, goal),
-        () => {
-          this.persist();
-          this.broadcastUpdated(s.data);
-          this.broadcastLoops(); // each unmet attempt bumps the loop's live iteration count
+      driver = new TurnRunner({
+        session: s,
+        renderer: this.renderer,
+        env: this.agentEnv(s),
+        onResult: (usage) => this.onAgentResult(id, usage),
+        onCommands: (commands) => this.onSessionCommands(id, commands),
+        onTurnError: (err) => this.onTurnError(err),
+        // Disk is truth (cc plan 6 §4.9): a turn that ended without a result may have
+        // landed more in the transcript than the stream delivered — heal immediately.
+        onAbnormalEnd: () => this.reconcileFromTranscript(id, "abnormal turn end"),
+        // The daemon's approve tool answers everything CC's engine would prompt for — including
+        // AskUserQuestion (spike finding c) — and the session's role tool server + the goal
+        // Stop hook ride the same per-spawn config, so bearer rotations and role changes land.
+        permissionArgs: () => {
+          const overlay = this.ccMcpCfg.writeSettingsOverlay(id, { goalStopHook: true });
+          const ids = this.ccToolIdsFor(s);
+          return [
+            "--mcp-config", this.ccMcpCfg.writeConfig(id, this.ccToolServerFor(s) ? [this.ccToolServerFor(s)!.name] : []),
+            "--permission-prompt-tool", CC_PERMISSION_TOOL,
+            ...(ids.length ? ["--allowedTools", ids.join(",")] : []),
+            ...(overlay ? ["--settings", overlay] : []),
+          ];
         },
-      );
+      });
       this.drivers.set(id, driver);
     }
     return driver;
@@ -1767,6 +1733,9 @@ export class Supervisor {
    * key set from Settings → Models mid-session takes effect on the very next plan, mirroring how the
    * autopilot panel resolves its key live (see runAutopilot). (adversarial panel)
    */
+  // TODO(cc plan 8): currently UNCALLED — its only caller was the SDK AgentDriver's plan-proposed
+  // hook (deleted in plan 7). Rewire onto the CC ExitPlanMode flow (the approve tool sees
+  // input.plan) or decide to drop the feature. Tracked in plan 8's parity hot-spot list.
   private planReviewer(s: Session): PlanProposedHook {
     return async (plan: string) => {
       if (!s.data.adversarialReview || !plan.trim()) return; // not opted in / nothing to review
