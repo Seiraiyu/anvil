@@ -127,7 +127,9 @@ export class TurnRunner implements SessionDriver {
     this.interrupting = false;
     this.startedWithResume = !!s.data.claudeSessionId;
 
-    const cmd = this.deps.ccCommand ?? resolveCcCommand(this.deps.env);
+    // process.env (not the §3 allow-list): ANVIL_CLI_PATH is a daemon-level setting — the plan-2
+    // managed-install bridge writes it there, and agentEnv deliberately strips non-allow-listed keys.
+    const cmd = this.deps.ccCommand ?? resolveCcCommand(process.env);
     const args = [
       ...cmd.slice(1),
       "-p",

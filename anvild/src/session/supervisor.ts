@@ -61,6 +61,7 @@ import { TerminalManager } from "./terminal-manager";
 import { FileWatchManager } from "./file-watch-manager";
 import { createWorktree, gitStatus, gitStatusAsync, recreateWorktree, removeWorktree, worktreeHealth } from "./worktree";
 import { AgentDriver, type TurnUsage } from "../agent/driver";
+import { TurnRunner, type SessionDriver } from "../cc/turn-runner";
 import { skillPlugins } from "../agent/skills";
 import type { PlanProposedHook } from "../agent/permissions";
 import { buildDefaultToolsServer, DEFAULT_MCP_SERVER_NAME, DEFAULT_TOOL_IDS } from "../agent/default-tools";
@@ -164,7 +165,7 @@ export interface SupervisorConfig {
 export class Supervisor {
   private readonly store: SessionStore;
   private readonly sessions = new Map<string, Session>();
-  private readonly drivers = new Map<string, AgentDriver>();
+  private readonly drivers = new Map<string, SessionDriver>();
   private readonly logs = new Map<string, EventLog>();
   /** Resilience telemetry (v4, §5.7): the daemon's own counters + the latest report from each client. */
   private readonly serverCounters: Record<string, number> = { resumeDelta: 0, resumeSnapshot: 0, promptDeduped: 0 };
@@ -1393,10 +1394,25 @@ export class Supervisor {
   }
 
   /** Get the session's live driver, creating it lazily on first use (arch §6.2). */
-  private ensureDriver(id: string): AgentDriver {
+  private ensureDriver(id: string): SessionDriver {
     let driver = this.drivers.get(id);
     if (!driver) {
       const s = this.require(id);
+      // CLI-direct transport (cc-cli-transport plan 3), opt-in per daemon: core sessions ride the
+      // spawned CC CLI instead of the Agent SDK. Permission brokering + daemon MCP tools join in
+      // Plans 4–5; until then this path is for core create/converse/interrupt/resume/model flows.
+      if (process.env.ANVIL_CC_DIRECT === "1") {
+        const runner = new TurnRunner({
+          session: s,
+          renderer: this.renderer,
+          env: this.agentEnv(s),
+          onResult: (usage) => this.onAgentResult(id, usage),
+          onCommands: (commands) => this.onSessionCommands(id, commands),
+          onTurnError: (err) => this.onTurnError(err),
+        });
+        this.drivers.set(id, runner);
+        return runner;
+      }
       const isDefault = s.data.isDefault === true;
       const isLead = s.data.teamRole === "lead";
       const isMember = s.data.teamRole === "member" && !!s.data.parentId;

@@ -258,3 +258,16 @@ test("fixtures sanity: the args file exists only when a spawn happened", () => {
   expect(existsSync(FAKE_CC)).toBe(true);
   expect(existsSync(join(FIXTURES, "basic.ndjson"))).toBe(true);
 });
+
+test("tool turn: status derives running_tool → thinking → idle and tool events flow", async () => {
+  const { s, events, statuses } = fakeSession("sess_tool");
+  const { tr, results } = runner(s, { FAKE_CC_FIXTURE: join(FIXTURES, "tool.ndjson") });
+  tr.prompt("use the Read tool");
+  await until(() => results.length === 1);
+  const types = events.map((e) => e.type);
+  expect(types).toContain("tool.use");
+  expect(types).toContain("tool.result");
+  expect(statuses).toContain("running_tool");
+  expect(statuses[statuses.length - 1]).toBe("idle");
+  expect(statuses.indexOf("running_tool")).toBeLessThan(statuses.lastIndexOf("thinking"));
+});
