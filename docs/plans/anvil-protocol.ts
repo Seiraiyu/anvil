@@ -195,10 +195,12 @@ export interface Usage {
 }
 
 /**
- * Live context-window occupancy for the current topic, read from the Agent SDK's `getContextUsage()`
- * (the same numbers Claude Code's own context bar shows) — NOT cumulative billing. `used` is the tokens
- * currently in the window (system prompt + tools + messages); `max` is the model's usable window. Absent
- * until the first turn reports, and reset when the topic is cleared or the context is compacted. (§context)
+ * Live context-window occupancy for the current topic — NOT cumulative billing. `used` is the tokens
+ * currently in the window (system prompt + tools + messages); `max` is the model's usable window.
+ * SDK transport reads the Agent SDK's `getContextUsage()`; the CLI-direct transport (cc-cli-transport
+ * §4.2) derives it from the turn's `result` message (input+cache tokens vs `modelUsage.contextWindow`) —
+ * same meaning, same meter. Absent until the first turn reports, and reset when the topic is cleared
+ * or the context is compacted. (§context)
  */
 export interface ContextUsage {
   used: number;
@@ -206,8 +208,10 @@ export interface ContextUsage {
 }
 
 /**
- * One rate-limit window's utilization, read from the Agent SDK's usage endpoint (§3) — the same
- * windows shown in claude.ai → Settings → Usage. `utilization` is a percentage, 0–100.
+ * One rate-limit window's utilization — the same windows shown in claude.ai → Settings → Usage.
+ * `utilization` is a percentage, 0–100. SDK transport reads the Agent SDK's usage endpoint (§3);
+ * the CLI-direct transport has no stream-json equivalent (the CLI's `rate_limit_event` carries no
+ * utilization), so under it the gauge keeps its last-known value (cc-cli-transport plan 3 task 6).
  */
 export interface RateWindow {
   utilization: number; // 0–100: percent of the window consumed
