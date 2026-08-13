@@ -7,15 +7,35 @@
 
 | Task | Description | Status | Tested | Pushed |
 |------|-------------|--------|--------|--------|
-| 1 | Fake-CC test harness (net-new — no fake-child idiom exists in repo) | pending | no | no |
-| 2 | `cc/turn-runner.ts`: spawn/turn lifecycle state machine (TDD against harness) | pending | no | no |
-| 3 | Stdin writer: port `attachmentBlock()`/`userMessage()` from `input-queue.ts` | pending | no | no |
-| 4 | Retarget `map.ts` to `CCMessage`; add fallback classification | pending | no | no |
-| 5 | Protocol: `fallback.card` ContentBlock arm + `ConversationEvent` arm + golden regen | pending | no | no |
-| 6 | `TurnUsage` from `result` message (delta 2) + gauge degradation | pending | no | no |
-| 7 | Supervisor integration behind `ANVIL_CC_DIRECT=1` flag | pending | no | no |
-| 8 | Interrupt/resume/model-switch/status derivation end-to-end tests | pending | no | no |
-| 9 | Session-id capture + `isResumeRejectedError` port + resume-fallback test | pending | no | no |
+| 1 | Fake-CC test harness (net-new — no fake-child idiom exists in repo) | done | yes | yes |
+| 2 | `cc/turn-runner.ts`: spawn/turn lifecycle state machine (TDD against harness) | done | yes | yes |
+| 3 | Stdin writer: port `attachmentBlock()`/`userMessage()` from `input-queue.ts` | done | yes | yes |
+| 4 | Retarget `map.ts` to `CCMessage`; add fallback classification | done | yes | yes |
+| 5 | Protocol: `fallback.card` ContentBlock arm + `ConversationEvent` arm + golden regen | done | yes | yes |
+| 6 | `TurnUsage` from `result` message (delta 2) + gauge degradation | done | yes | yes |
+| 7 | Supervisor integration behind `ANVIL_CC_DIRECT=1` flag | done | yes | yes |
+| 8 | Interrupt/resume/model-switch/status derivation end-to-end tests | done | yes | yes |
+| 9 | Session-id capture + `isResumeRejectedError` port + resume-fallback test | done | yes | yes |
+
+Execution notes (2026-08-13):
+- **Task 5 shape**: the fallback is a 4th `ContentBlock` arm riding `assistant.message` (and the
+  snapshot's existing `assistant` arm) — NO new event type / ConversationEvent arm needed, so the
+  pinned type-literal surface is untouched. Web renders it in `conversation.ts` (`appendFallbackCard`,
+  collapsed `<details>`, textContent-only), not `dialogs.ts`.
+- **Task 3 by reuse**: `attachmentBlock` exported from `input-queue.ts`; the runner serializes
+  `userMessage()` to the stdin NDJSON line. Queue class deletion stays with Plan 7/8.
+- **Task 6 answered by the recordings**: `result` has no `rate_limits`/subscription (and
+  `rate_limit_event` carries no utilization) ⇒ `rateLimits/subscriptionType: null`, gauge keeps
+  last-known. `contextUsage` IS derivable (input+cache tokens vs `modelUsage.contextWindow`) —
+  the meter stays live. Protocol doc comments rewritten transport-neutral.
+- **Assumption 5 verified LIVE at execution** (the plan-1 recorder used argv prompts, not
+  `--input-format stream-json`): TurnRunner drove the real claude 2.1.231 through two turns —
+  stdin-close ended each turn, `--resume` carried context, and a haiku→sonnet switch took effect
+  (turn-2 window 1M). Runner adds `--setting-sources "" --strict-mcp-config` (plan-1/2 discipline).
+- `isResumeRejectedError` stays in `driver.ts` (runner imports it); it moves when driver.ts dies (Plan 8).
+- Interrupt uses `killGroup(group, grace, "SIGINT")` — procgroup gained optional `stdio: "pipe"` +
+  first-signal parameters. Permission mode is `"default"` until Plans 4–5 (read-only tools work;
+  mutating tools are denied by the CLI's own engine in -p mode).
 
 Key decisions already fixed by design/interview (do not relitigate at execution):
 - **Harness style (Task 1):** repo never mocks `node:child_process`; the fake CC is a *real spawned bun script* (`test/helpers/fake-cc.ts` + fixture-driven stdout: replay a golden `.ndjson` with configurable pacing, exit code, mid-line crash, ignore-SIGINT mode). Aligns with "child processes are never faked" convention while keeping tests offline.
