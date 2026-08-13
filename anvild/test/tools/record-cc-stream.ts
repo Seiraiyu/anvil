@@ -41,6 +41,11 @@ const COMMON = [
   "--verbose",
   "--model", "haiku",
   "--permission-mode", "bypassPermissions",
+  // Match the daemon's environment (driver.ts runs sessions with settingSources: []): no user
+  // settings means no personal hooks/plugins/MCP servers in the stream — recordings stay
+  // representative of daemon-driven sessions AND free of the recording user's config.
+  "--setting-sources", "",
+  "--strict-mcp-config",
 ];
 
 const cwd = mkdtempSync(join(tmpdir(), "anvil-cc-record-"));
