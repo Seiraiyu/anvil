@@ -81,7 +81,10 @@ export class CcInstalls {
 
 const DOWNLOAD_BASE = "https://downloads.claude.ai/claude-code-releases";
 
-export type CommandRunner = (cmd: string[], opts?: { cwd?: string; env?: Record<string, string> }) => Promise<{ code: number; out: string }>;
+export type CommandRunner = (
+  cmd: string[],
+  opts?: { cwd?: string; env?: Record<string, string>; timeoutMs?: number },
+) => Promise<{ code: number; out: string }>;
 
 /** Bun.spawn with merged stdout+stderr — the shape of selfupdate.ts's runner, cc-flavored. */
 export const defaultRun: CommandRunner = async (cmd, opts = {}) => {
@@ -91,6 +94,8 @@ export const defaultRun: CommandRunner = async (cmd, opts = {}) => {
     stdout: "pipe",
     stderr: "pipe",
     stdin: "ignore",
+    // A hung child exits nonzero via SIGTERM instead of wedging the caller forever.
+    ...(opts.timeoutMs ? { timeout: opts.timeoutMs } : {}),
   });
   const [stdout, stderr] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
   const code = await p.exited;
