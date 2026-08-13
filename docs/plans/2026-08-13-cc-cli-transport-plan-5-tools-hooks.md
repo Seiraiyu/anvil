@@ -7,12 +7,32 @@
 
 | Task | Description | Status | Tested | Pushed |
 |------|-------------|--------|--------|--------|
-| 1 | MCP tool host: serve the 4 role servers over the Plan-4 HTTP MCP endpoint | pending | no | no |
-| 2 | Re-register: role ternary (`supervisor.ts:1411-1420`) → entries in session `.mcp.json` | pending | no | no |
-| 3 | Settings overlay writer: per-session `--settings` file, additive hooks only | pending | no | no |
-| 4 | Goal stop-hook as CC `Stop` hook → daemon HTTP callback | pending | no | no |
-| 5 | Skills/commands autocomplete re-source from real `~/.claude` | pending | no | no |
-| 6 | Delete `createSdkMcpServer` imports; handler/deps tests keep passing | pending | no | no |
+| 1 | MCP tool host: serve the 4 role servers over the Plan-4 HTTP MCP endpoint | done | yes | yes |
+| 2 | Re-register: role ternary (`supervisor.ts:1411-1420`) → entries in session `.mcp.json` | done | yes | yes |
+| 3 | Settings overlay writer: per-session `--settings` file, additive hooks only | done | yes | yes |
+| 4 | Goal stop-hook as CC `Stop` hook → daemon HTTP callback | done | yes | yes |
+| 5 | Skills/commands autocomplete re-source from real `~/.claude` | done | yes | yes |
+| 6 | Delete `createSdkMcpServer` imports; handler/deps tests keep passing | done | yes | yes |
+
+Execution notes (2026-08-13):
+- `cc/tool-host.ts` mirrors the SDK `tool()` signature (`defineTool`), so the 4 modules changed
+  only their import + server-builder return; handler tests untouched (the handler type accepts
+  the old `(args, extra)` arity). JSON Schemas via zod 4's `z.toJSONSchema`. Also fixed
+  `create_session`'s leftover legacy autonomy enum (plan-4 straggler).
+- Role servers ride the SAME per-session bearer at `/api/cc/mcp/<id>/<server>`; role mismatch is
+  a 404 even with a valid bearer. The overlay Stop hook is registered on every spawn (the daemon
+  answers `{}` fast when no goal — matches the SDK path's always-registered hook, and a goal
+  armed mid-session lands on the very next turn).
+- Turn-runner is now **fully CC-native** (design §4.3): dropped `--setting-sources ""` and
+  `--strict-mcp-config` — user/project settings, CLAUDE.md, skills, plugins, hooks, and the
+  user's own MCP servers load like terminal CC. (CLAUDE.md's "settingSources: []" note is now
+  transport-dependent; plan 8's doc sweep updates it.) The goal judge is injectable
+  (`SupervisorConfig.goalJudge`) and uses the token-optional shellEnv (fail-open on a missing
+  credential); the SDK path lost its in-process servers a plan early (deleted with driver in plan 8).
+- **Phase acceptance (§5.5) passed live**: the concierge called daemon-hosted
+  `mcp__anvil__list_environments` through the real CLI ("EMPTY" on a fresh store), and an armed
+  goal's Stop hook BLOCKED the first stop ({decision:"block"} contract — the model complied and
+  produced the demanded word), released on the second judgement, goal cleared.
 
 Fixed decisions and known facts:
 - **Task 1:** the 4 modules (`default-tools.ts`, `team-tools.ts`, `member-tools.ts`, `planning-tools.ts`) already split pure handlers + `*ToolDeps` from SDK registration precisely "so tests can invoke handlers without a live SDK server" (their own comment). Only the `createSdkMcpServer({name, tools})` wrapper is replaced by an MCP-over-HTTP host module (`cc/tool-host.ts`) that serves the same tool names — keep the `mcp__anvil__*` / `mcp__anvil_team__*` id shape (`*_TOOL_IDS` arrays unchanged) so transcripts and `extraAllowedTools` allowlisting stay identical. Zod schemas carry over as-is.
