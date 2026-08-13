@@ -935,6 +935,11 @@ export interface MessageUserEvent extends Envelope, SessionScoped {
    *  the server can dedupe a re-flushed offline send (exactly-once), and echoed so the client can retire
    *  the matching optimistic bubble instead of rendering a duplicate. */
   cid?: Cid;
+  /** The CC transcript-line uuid this event corresponds to (cc plan 6, additive). Present on live
+   *  CLI-transport events and on reconciler backfills; the transcript reconciler dedupes by it so
+   *  replay/backfill never double-applies. Absent on daemon-authored user prompts (CC mints the
+   *  uuid only when the turn spawns) — those are matched by text instead. Ignored by clients. */
+  ccUuid?: string;
 }
 /** Streaming token chunk. Raw markdown text; client renders incrementally (Streamdown-style). */
 export interface AssistantDeltaEvent extends Envelope, SessionScoped {
@@ -945,18 +950,24 @@ export interface AssistantDeltaEvent extends Envelope, SessionScoped {
 export interface AssistantMessageEvent extends Envelope, SessionScoped {
   type: "assistant.message";
   blocks: ContentBlock[];
+  /** CC transcript-line uuid (cc plan 6, additive) — reconciler dedupe key. Ignored by clients. */
+  ccUuid?: string;
 }
 export interface ToolUseEvent extends Envelope, SessionScoped {
   type: "tool.use";
   toolUseId: ToolUseId;
   name: string;
   input: unknown;
+  /** CC transcript-line uuid (cc plan 6, additive) — reconciler dedupe key. Ignored by clients. */
+  ccUuid?: string;
 }
 export interface ToolResultEvent extends Envelope, SessionScoped {
   type: "tool.result";
   toolUseId: ToolUseId;
   content: string;
   isError: boolean;
+  /** CC transcript-line uuid (cc plan 6, additive) — reconciler dedupe key. Ignored by clients. */
+  ccUuid?: string;
 }
 export interface PermissionRequestEvent extends Envelope, SessionScoped {
   type: "permission.request";

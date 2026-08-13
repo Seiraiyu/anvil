@@ -40,6 +40,23 @@ export function askUserQuestionToolIds(m: CCMessage): string[] {
  * a cast — the wire shapes are the same stream-json.
  */
 export function mapMessage(m: CCMessage, renderer: MarkdownRenderer): SessionEventBody[] {
+  return stampCcUuid(m, mapMessageBodies(m, renderer));
+}
+
+/** Correlate mapped events with the CC transcript line that produced them (cc plan 6): the
+ *  stream-json line uuid EQUALS the on-disk transcript line uuid (pinned by the transcript
+ *  golden), so the reconciler can dedupe backfills against live-logged events. Deltas stay
+ *  unstamped (transient, never persisted); result events aren't transcript lines. */
+function stampCcUuid(m: CCMessage, bodies: SessionEventBody[]): SessionEventBody[] {
+  const uuid = (m as { uuid?: unknown }).uuid;
+  if (typeof uuid !== "string" || uuid.length === 0) return bodies;
+  for (const b of bodies) {
+    if (b.type === "assistant.message" || b.type === "tool.use" || b.type === "tool.result") b.ccUuid = uuid;
+  }
+  return bodies;
+}
+
+function mapMessageBodies(m: CCMessage, renderer: MarkdownRenderer): SessionEventBody[] {
   switch (m.type) {
     case "stream_event": {
       const ev = (m as any).event;
