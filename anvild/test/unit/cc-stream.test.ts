@@ -11,6 +11,13 @@ test("known message types pass through typed", () => {
   expect((msg as any).session_id).toBe("abc");
 });
 
+test("rate_limit_event is KNOWN (present in every cc 2.1.231 recording)", () => {
+  const { msg, warn } = parseCCLine('{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"}}');
+  expect(warn).toBeUndefined();
+  expect(msg?.type).toBe("rate_limit_event");
+  expect((msg as any).rate_limit_info.status).toBe("allowed");
+});
+
 test("unknown type is preserved, not dropped", () => {
   const { msg } = parseCCLine('{"type":"totally_new_thing","payload":{"x":1}}');
   expect(msg?.type).toBe("unknown");

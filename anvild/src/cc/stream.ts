@@ -48,6 +48,17 @@ export interface CCStreamEvent {
   [k: string]: unknown;
 }
 
+/**
+ * Rate-limit telemetry the CLI emits alongside every turn (observed in cc 2.1.231 golden
+ * recordings — one per API request). Vendored as KNOWN because it appears in every stream;
+ * feeds the account usage display eventually, ignorable until then.
+ */
+export interface CCRateLimitEvent {
+  type: "rate_limit_event";
+  rate_limit_info?: Record<string, unknown>;
+  [k: string]: unknown;
+}
+
 /** A top-level type this daemon version doesn't know. Rendered as a fallback card, never dropped. */
 export interface CCUnknown {
   type: "unknown";
@@ -55,9 +66,9 @@ export interface CCUnknown {
   raw: Record<string, unknown>;
 }
 
-export type CCMessage = CCSystemInit | CCAssistant | CCUser | CCResult | CCStreamEvent | CCUnknown;
+export type CCMessage = CCSystemInit | CCAssistant | CCUser | CCResult | CCStreamEvent | CCRateLimitEvent | CCUnknown;
 
-const KNOWN = new Set(["system", "assistant", "user", "result", "stream_event"]);
+const KNOWN = new Set(["system", "assistant", "user", "result", "stream_event", "rate_limit_event"]);
 
 /** Skip-with-warn ceiling; a single content block should never legitimately reach this. */
 export const MAX_LINE_BYTES = 8 * 1024 * 1024;
