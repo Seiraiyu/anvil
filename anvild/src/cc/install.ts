@@ -73,6 +73,16 @@ export class CcInstalls {
   }
 }
 
+/**
+ * Make the managed install the daemon's CLI even before Plan 3, via the seam that already
+ * exists: agent/cli.ts reads ANVIL_CLI_PATH. An explicit pre-set value (operator override,
+ * packaged-app bundle path) always wins; no activated install ⇒ no-op (SDK default).
+ */
+export function bridgeCliPath(installs: CcInstalls, env: Record<string, string | undefined>): void {
+  const bin = installs.currentBinary();
+  if (bin && !env.ANVIL_CLI_PATH) env.ANVIL_CLI_PATH = bin;
+}
+
 // ── Downloader ──────────────────────────────────────────────────────────────────────────
 // Contract verified live by test/tools/probe-cc-installer.ts (2026-08-13): the official
 // install.sh has no directory control, but the release bucket it reads from does exactly

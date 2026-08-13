@@ -130,3 +130,32 @@ test("defaultRun merges stdout+stderr and reports exit code", async () => {
   expect(r.out).toContain("out");
   expect(r.out).toContain("err");
 });
+
+// ── ANVIL_CLI_PATH bridge (plan 2 task 9): the managed install becomes the daemon's CLI
+// even while the driver still rides the SDK (agent/cli.ts reads ANVIL_CLI_PATH).
+import { bridgeCliPath } from "../../src/cc/install";
+
+test("bridge sets ANVIL_CLI_PATH to the managed current binary", () => {
+  const { cc } = store();
+  fakeInstall(cc, "2.1.0");
+  cc.activate("2.1.0");
+  const env: Record<string, string | undefined> = {};
+  bridgeCliPath(cc, env);
+  expect(env.ANVIL_CLI_PATH).toBe(binaryPath(cc.installDirFor("2.1.0")));
+});
+
+test("an explicit pre-set ANVIL_CLI_PATH wins over the managed install", () => {
+  const { cc } = store();
+  fakeInstall(cc, "2.1.0");
+  cc.activate("2.1.0");
+  const env: Record<string, string | undefined> = { ANVIL_CLI_PATH: "/opt/custom/claude" };
+  bridgeCliPath(cc, env);
+  expect(env.ANVIL_CLI_PATH).toBe("/opt/custom/claude");
+});
+
+test("bridge is a no-op with no activated install", () => {
+  const { cc } = store();
+  const env: Record<string, string | undefined> = {};
+  bridgeCliPath(cc, env);
+  expect(env.ANVIL_CLI_PATH).toBeUndefined();
+});

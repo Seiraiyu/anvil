@@ -9,6 +9,7 @@ import { createServer, VERSION } from "./server/http";
 import { createMarkdownRenderer } from "./render/markdown-pipeline";
 import { installTimestampedConsole, recordExit, recordStart } from "./daemon/lifecycle";
 import { armWatchdog } from "./daemon/updater/arm";
+import { CcInstalls, bridgeCliPath } from "./cc/install";
 
 // Timestamp every log line before anything logs (so restart cadence + event timing are legible in the
 // launchd log). Must run first — earlier bare lines couldn't be correlated in time.
@@ -47,6 +48,10 @@ if (seedFromEnv(accounts)) console.log('[anvild] migrated the existing Claude to
 // arch §3: refuse to start on a §3 VIOLATION (a metered key). A missing/dead token warns and boots
 // degraded instead — that's what lets a fresh headless box exist long enough to be paired (§4.1).
 assertSubscriptionAuth();
+
+// Managed CC install → the (still-SDK) driver: make the store's `current` binary the session CLI
+// via the existing ANVIL_CLI_PATH seam (agent/cli.ts). Explicit env always wins (cc plan 2 task 9).
+bridgeCliPath(new CcInstalls(config.ccDir), process.env);
 
 // Log how the PRIOR run ended (deliberate restart vs crash/respawn) and stamp this run `running`, so the
 // next restart is attributable on sight (arch §5 diagnostics).
