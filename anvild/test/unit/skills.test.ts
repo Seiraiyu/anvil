@@ -97,3 +97,16 @@ test("skillPlugins returns nothing when there are no skill dirs", () => {
   const plugins = skillPlugins({ cwd: repo, sessionId: "sess_2", stateDir: state });
   expect(plugins.every((p) => !p.path.endsWith(join("sess_2", "project")))).toBe(true);
 });
+
+test("CC-native bare skill names are enriched from the real skill dirs (plan 5 task 5)", () => {
+  // Bare (un-namespaced) names are how CC-native init lists real skills; enrichment falls
+  // through user → project dirs. Exercised via the project dir (homedir() is not swappable).
+  const repo = mkdtempSync(join(tmpdir(), "anvil-skill-repo-"));
+  mkdirSync(join(repo, ".git"), { recursive: true });
+  writeSkill(repo, "deploy-widget", "Ship the widget to prod");
+  const cmds = buildCommandInfo(["deploy-widget", "unknowable"], repo);
+  const deploy = cmds.find((c) => c.name === "deploy-widget")!;
+  expect(deploy.description).toBe("Ship the widget to prod");
+  expect(deploy.source).toBe("project");
+  expect(cmds.find((c) => c.name === "unknowable")!.source).toBe("builtin"); // graceful fallback
+});
