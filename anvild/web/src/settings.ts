@@ -156,7 +156,7 @@ export function openSettings(): void {
       </section>
       <section class="settings-panel" data-tab="prompts">
         <div class="section-head"><h3>Prompts</h3><button id="set-add-prompt" class="primary">${icon("add")} Add prompt</button></div>
-        <p class="small muted">Reusable prompt snippets. Each shows up as a button in the sidebar — click it to drop the prompt into the chat box.</p>
+        <p class="small muted">Reusable prompt snippets. Each shows up in the Prompts menu in the header — click it to drop the prompt into the chat box.</p>
         <div id="prompt-cards"></div>
       </section>
       <section class="settings-panel" data-tab="appearance">
