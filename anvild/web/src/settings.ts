@@ -22,8 +22,8 @@
 // initSettings(deps) — mirroring fleet/sidebar/conversation/autopilot — during main's module init.
 // Cross-module REASSIGNED scalars main still reads (`claudeAccounts` for the header chip + account
 // pickers; `todoistConnected`/`todoistProjectsLoaded` for the environment modal and the member
-// token-propagation check) live on `ui` in state.ts; in-place containers (`todoistProjects`,
-// `readmeLoaded`) stay `const` here.
+// token-propagation check) live on `ui` in state.ts; the in-place container `todoistProjects` stays
+// `const` here.
 import { apiFetch } from "./api";
 import { $, busy, byEnvName, envIcon, esc, icon } from "./dom";
 // dialogs.ts is a leaf, so the modal/toast helpers and the environment modals are direct imports —
@@ -1100,12 +1100,15 @@ export function renderEnvCards(): void {
   host.querySelectorAll<HTMLElement>(".env-edit").forEach((b) => b.addEventListener("click", () => showEditEnvironment(b.dataset.env!)));
   host.querySelectorAll<HTMLElement>(".env-readme").forEach((b) => b.addEventListener("click", () => toggleReadme(b.dataset.env!)));
 }
-const readmeLoaded = new Set<string>();
 async function toggleReadme(id: string): Promise<void> {
   const body = document.getElementById(`readme-${id}`);
   if (!body) return;
   body.hidden = !body.hidden;
-  if (body.hidden || readmeLoaded.has(id)) return;
+  // The body element IS the load cache. A module-level "already fetched" set desynced from the DOM:
+  // any re-render of the environment list (an `environments` broadcast — e.g. right after editing an
+  // environment) recreates this div EMPTY, but the set still claimed it was loaded, so the next click
+  // expanded a blank panel with no content, no spinner, and no error.
+  if (body.hidden || body.childElementCount > 0) return;
   body.innerHTML = `<p class="small muted">Loading README…</p>`;
   try {
     const r = (await (await serverFetch(serverOfEnv(id).url, `/api/environments/${encodeURIComponent(id)}/readme`)).json()) as { markdown?: { html: string }; text?: string; missing?: boolean };
@@ -1114,7 +1117,6 @@ async function toggleReadme(id: string): Promise<void> {
       body.innerHTML = `<div class="md reader-md">${r.markdown.html}</div>`;
       void runMermaid(body.querySelector(".reader-md") as HTMLElement);
     } else body.innerHTML = `<pre class="reader-text">${esc(r.text ?? "")}</pre>`;
-    readmeLoaded.add(id);
   } catch {
     body.innerHTML = `<p class="small muted">Couldn't load the README.</p>`;
   }
