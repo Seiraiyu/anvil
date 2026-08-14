@@ -1215,10 +1215,25 @@ export function createServer(opts: ServerOptions): ServerHandle {
 
   // attachments (arch §6.5): POST uploads a pasted/dropped file, GET serves it back. Method "*":
   // the handler narrows POST/GET itself so any other method keeps answering 405 (not 404).
-  routeRe("*", /^\/api\/sessions\/([^/]+)\/attachments(?:\/([^/]+))?$/, async (req, _url, m) => {
+  routeRe("*", /^\/api\/sessions\/([^/]+)\/attachments(?:\/([^/]+))?$/, async (req, url, m) => {
     const sessionId = m![1]!;
     const attId = m![2];
     if (req.method === "POST" && !attId) {
+      // Streaming upload (§6.5): a non-JSON body IS the file. The bytes go straight to disk, so a
+      // large attachment never has to exist in memory on either side — the base64-in-JSON path below
+      // needed ~2-3x the file on the client and inflated the wire by 4/3, which is what made big
+      // uploads fail. Name/type ride in the query string. The JSON path stays for older clients
+      // (native shells bundle their own copy of the web UI and update on their own cadence).
+      if (!(req.headers.get("content-type") ?? "").includes("application/json")) {
+        try {
+          const name = url.searchParams.get("name") || "attachment";
+          const mediaType = url.searchParams.get("mediaType") || "";
+          const attachment = await supervisor.addAttachmentStream(sessionId, name, mediaType, req.body);
+          return Response.json({ attachment } satisfies rest.UploadAttachmentResponse);
+        } catch (e) {
+          return new Response(e instanceof Error ? e.message : "upload failed", { status: 400 });
+        }
+      }
       try {
         const body = (await req.json()) as { name?: string; mediaType?: string; dataBase64?: string };
         // mediaType may be empty (Android's content picker often omits it); the store infers

@@ -16,11 +16,31 @@ export interface CcUserMessage {
 export interface InlineAttachment {
   mediaType: string;
   name: string;
-  data: string; // base64
+  data: string; // base64 — at most `inlineBudget(mediaType)` bytes worth (see loadForAgent)
+  /** The attachment's real size on disk, which may exceed what `data` carries. */
+  size?: number;
+  /** True when the file is larger than its inline budget, so `data` holds only the head. */
+  truncated?: boolean;
 }
 
 /** Largest text file we inline into the prompt (bytes). Bigger files would blow the context. */
 const MAX_INLINE_TEXT = 256 * 1024;
+/** Caps for the media we send whole. Beyond these the API would reject the block anyway, so we
+ *  describe the file instead of shipping megabytes the model can't use. */
+const MAX_INLINE_IMAGE = 8 * 1024 * 1024;
+const MAX_INLINE_PDF = 32 * 1024 * 1024;
+
+/**
+ * How many bytes of an attachment are worth reading off disk for the model. Images and PDFs go
+ * whole (up to their API-shaped caps); everything else only ever contributes its first
+ * MAX_INLINE_TEXT bytes (plus a small margin for the binary sniff), so a huge log or archive costs
+ * kilobytes of memory per turn instead of its full size.
+ */
+export function inlineBudget(mediaType: string): number {
+  if (mediaType.startsWith("image/")) return MAX_INLINE_IMAGE;
+  if (mediaType === "application/pdf") return MAX_INLINE_PDF;
+  return MAX_INLINE_TEXT + 8192;
+}
 
 /** Heuristic: bytes are "text" if they decode as UTF-8 with no NUL bytes. */
 function looksTextual(mediaType: string, buf: Buffer): boolean {
@@ -36,20 +56,26 @@ function looksTextual(mediaType: string, buf: Buffer): boolean {
  * can actually read code/logs/configs), and a short note for binaries we can't inline. (arch §6.5)
  */
 export function attachmentBlock(att: InlineAttachment): Record<string, unknown> {
-  if (att.mediaType.startsWith("image/")) {
-    return { type: "image", source: { type: "base64", media_type: att.mediaType, data: att.data } };
-  }
-  if (att.mediaType === "application/pdf") {
-    return { type: "document", source: { type: "base64", media_type: "application/pdf", data: att.data } };
-  }
   const buf = Buffer.from(att.data, "base64");
+  const size = att.size ?? buf.length;
+  // Media we can only send WHOLE: a half-read image or PDF is not a smaller image, it's a corrupt
+  // one. Past the budget, describe the file rather than shipping bytes the API would reject.
+  if (att.mediaType.startsWith("image/") || att.mediaType === "application/pdf") {
+    const kind = att.mediaType === "application/pdf" ? "PDF" : "image";
+    if (att.truncated) {
+      return { type: "text", text: `[Attached ${kind} "${att.name}" (${size} bytes) — too large to inline; it is saved in this session's attachments.]` };
+    }
+    return att.mediaType === "application/pdf"
+      ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: att.data } }
+      : { type: "image", source: { type: "base64", media_type: att.mediaType, data: att.data } };
+  }
   if (looksTextual(att.mediaType, buf)) {
-    const truncated = buf.length > MAX_INLINE_TEXT;
+    const truncated = att.truncated || buf.length > MAX_INLINE_TEXT;
     const body = buf.subarray(0, MAX_INLINE_TEXT).toString("utf8");
-    const note = truncated ? `\n…[truncated at ${MAX_INLINE_TEXT} bytes of ${buf.length}]` : "";
+    const note = truncated ? `\n…[truncated at ${MAX_INLINE_TEXT} bytes of ${size}]` : "";
     return { type: "text", text: `Attached file "${att.name}":\n\n\`\`\`\n${body}${note}\n\`\`\`` };
   }
-  return { type: "text", text: `[Attached file "${att.name}" (${att.mediaType}, ${buf.length} bytes) — binary, not inlined.]` };
+  return { type: "text", text: `[Attached file "${att.name}" (${att.mediaType}, ${size} bytes) — binary, not inlined.]` };
 }
 
 /** Build a stream-json user message: text, plus any uploaded attachments as content blocks (arch §6.5). */

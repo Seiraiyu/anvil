@@ -70,6 +70,7 @@ import { CcMcpConfig, CC_PERMISSION_TOOL } from "../cc/mcp-config";
 import { handleCcMcp } from "../cc/permission-server";
 import { handleToolServer, type AnvilToolServer } from "../cc/tool-host";
 import type { PlanProposedHook } from "../agent/permissions";
+import { inlineBudget, type InlineAttachment } from "../agent/attachments";
 import { buildDefaultToolsServer, DEFAULT_MCP_SERVER_NAME, DEFAULT_TOOL_IDS } from "../agent/default-tools";
 import { TEAM_MCP_SERVER_NAME, TEAM_TOOL_IDS } from "../agent/team-tools";
 import { MEMBER_MCP_SERVER_NAME, MEMBER_TOOL_IDS } from "../agent/member-tools";
@@ -1365,6 +1366,11 @@ export class Supervisor {
     this.require(sessionId);
     return this.attachStore.add(sessionId, name, mediaType, dataBase64);
   }
+  /** Streaming upload (§6.5) — the body goes to disk without being held in memory. */
+  addAttachmentStream(sessionId: string, name: string, mediaType: string, body: ReadableStream<Uint8Array> | null): Promise<AttachmentRef> {
+    this.require(sessionId);
+    return this.attachStore.addStream(sessionId, name, mediaType, body);
+  }
   attachmentBytes(sessionId: string, id: string): { mediaType: string; path: string } | undefined {
     return this.attachStore.bytes(sessionId, id);
   }
@@ -1433,9 +1439,9 @@ export class Supervisor {
     const attachments = attachmentIds
       .map((aid) => this.attachStore.ref(id, aid))
       .filter((r): r is AttachmentRef => r !== undefined);
-    const inline = attachmentIds
-      .map((aid) => this.attachStore.loadForAgent(id, aid))
-      .filter((x): x is { mediaType: string; name: string; data: string } => x !== undefined);
+    // Bounded per media type (inlineBudget): a big log or archive contributes kilobytes here, not
+    // its full size — this used to read every attachment whole on every turn.
+    const inline: InlineAttachment[] = attachmentIds.flatMap((aid) => this.attachStore.loadForAgent(id, aid, inlineBudget) ?? []);
 
     // Remember the opening brief (once) so the first turn can classify the remote branch prefix
     // from what the user actually asked for (arch §8) — the local slug alone is too terse.
