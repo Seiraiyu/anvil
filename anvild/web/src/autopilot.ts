@@ -254,9 +254,13 @@ function renderRunStatus(): void {
   const runningHead = runState.running && runState.serversTotal
     ? `Evaluating ${runState.serversTotal} project source${runState.serversTotal === 1 ? "" : "s"}…`
     : "Autopilot is running…";
+  // A finished run that failed everywhere gets a warning glyph, not a tick: a green check sitting
+  // directly above a red "Todoist is not connected" row read as success at a glance.
+  const failedAll = runState.results.length > 0 && runState.results.every((r) => !r.ok);
+  const doneHead = createdTotal ? `${createdTotal} new plan${createdTotal === 1 ? "" : "s"}` : failedAll ? "Autopilot didn't run" : "No new plans";
   const head = running
     ? `<span class="ap-status-head"><span class="msym spin">progress_activity</span> ${runningHead}</span>`
-    : `<span class="ap-status-head">${icon("check_circle")} ${createdTotal ? `${createdTotal} new plan${createdTotal === 1 ? "" : "s"}` : "No new plans"}</span>`;
+    : `<span class="ap-status-head">${icon(failedAll ? "warning" : "check_circle")} ${doneHead}</span>`;
   const live = running && runState.lastLine
     ? `<div class="ap-status-line">${esc(runState.lastLine)}</div>`
     : "";
@@ -917,7 +921,10 @@ async function runAutopilot(): Promise<void> {
           onAutopilotProgress(`⚠ ${srv.name}: ${msg}`);
         }
       }
-      toast(created ? `${created} new plan${created === 1 ? "" : "s"}` : "No new plans");
+      // Don't report a benign "No new plans" when in fact every server refused — the panel shows the
+      // reason, but the toast is the part people actually read.
+      const allFailed = runState.results.length > 0 && runState.results.every((r) => !r.ok);
+      toast(created ? `${created} new plan${created === 1 ? "" : "s"}` : allFailed ? "Autopilot didn't run — see the log" : "No new plans");
     });
   } finally {
     runState.running = false;

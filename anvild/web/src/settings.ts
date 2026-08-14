@@ -25,7 +25,7 @@
 // token-propagation check) live on `ui` in state.ts; the in-place container `todoistProjects` stays
 // `const` here.
 import { apiFetch } from "./api";
-import { $, busy, byEnvName, envIcon, esc, icon } from "./dom";
+import { $, busy, byEnvName, envIcon, esc, icon, repaintPreservingInput } from "./dom";
 // dialogs.ts is a leaf, so the modal/toast helpers and the environment modals are direct imports —
 // they used to arrive via initSettings(deps).
 import { closeModal, confirmDialog, showAddEnvironment, showEditEnvironment, showModal, toast } from "./dialogs";
@@ -173,7 +173,12 @@ export function openSettings(): void {
   $("#settings-close").addEventListener("click", () => dismissOverlay("settings"));
   $("#set-add-env").addEventListener("click", () => showAddEnvironment());
   $("#set-add-prompt").addEventListener("click", () => showEditPrompt());
-  $("#todoist-refresh").addEventListener("click", () => loadTodoistProjects(true));
+  // [WEB2-19] busy() owns the disable → "Refreshing…" → restore lifecycle, like every other async
+  // button here. Without it, rapid clicks fired overlapping projects.list requests and the panel
+  // flickered as each late reply repainted it.
+  $("#todoist-refresh").addEventListener("click", (e) =>
+    void busy(e.currentTarget as HTMLButtonElement, "Refreshing…", () => loadTodoistProjects(true)),
+  );
   root.querySelectorAll<HTMLElement>(".theme-opt").forEach((b) =>
     b.addEventListener("click", () => setThemePref(b.dataset.themePref as ThemePref)),
   );
@@ -338,7 +343,10 @@ export function todoistProjectOptions(selectedId?: string, exceptEnvId?: string)
 export function onTodoistStatus(connected: boolean, account?: string): void {
   ui.todoistConnected = connected;
   todoistAccount = account;
-  if (document.getElementById("todoist-panel")) renderTodoistPanel();
+  // Broadcast to every device, so it can land while someone is mid-paste in this panel's token
+  // field — repaint without eating their unsaved input.
+  const host = document.getElementById("todoist-panel");
+  if (host) repaintPreservingInput(host, renderTodoistPanel);
 }
 
 /** Fetch the account's projects (live) and cache them; `force` re-fetches even if already loaded. */
@@ -540,7 +548,10 @@ export function onAuthStatus(e: AuthStatusEvent): void {
   const state: ProviderAuth = { connected: e.connected, persisted: e.persisted, ...(e.masked ? { masked: e.masked } : {}) };
   if (e.provider === "openrouter") openRouterAuth = state;
   else claudeAuth = state;
-  if (document.getElementById("models-panel")) renderModelsPanel();
+  // Same hazard as onTodoistStatus: this arrives on every device, and the Models panel is exactly
+  // where someone pastes an OpenRouter key or Claude token.
+  const modelsHost = document.getElementById("models-panel");
+  if (modelsHost) repaintPreservingInput(modelsHost, renderModelsPanel);
   // A Claude-token change is exactly the transition the setup takeover exists for — a pair, a paste, or
   // an auto-degrade. Re-read health so the screen appears/clears live on every open device, rather than
   // only on the next reload (anvil-headless-join.md §5.1).
@@ -554,7 +565,8 @@ export function onAuthStatus(e: AuthStatusEvent): void {
 // chip + switch menu, and the new-session/environment account pickers).
 export function onAuthAccounts(e: AuthAccountsEvent): void {
   ui.claudeAccounts = e;
-  if (document.getElementById("models-panel")) renderModelsPanel();
+  const host = document.getElementById("models-panel");
+  if (host) repaintPreservingInput(host, renderModelsPanel); // keep unsaved token input (see onAuthStatus)
   // The header chip appears/disappears at the 1↔2-account boundary and shows a label the roster owns,
   // so a roster change has to repaint it even when no session.updated follows.
   updateHeaderAccount(activeId() ? sessions.get(activeId()!) : undefined);

@@ -839,6 +839,7 @@ export function showQuestion(requestId: string, questions: Question[]): void {
   // One tap answers when there's a single single-select question (the common "interview me" case).
   const oneTap = questions.length === 1 && !questions[0]!.multiSelect;
   const chosen: string[][] = questions.map(() => []); // button selections, per question
+  const otherFields: HTMLTextAreaElement[] = []; // one-tap free-text boxes, wired to reveal Submit
 
   const send = (): void => {
     const answers = gatherAnswers(card, questions, chosen);
@@ -893,6 +894,7 @@ export function showQuestion(requestId: string, questions: Question[]): void {
     };
     other.addEventListener("input", growOther);
     if (oneTap) {
+      otherFields.push(other);
       // Enter submits the one-tap case; Shift+Enter inserts a newline.
       other.addEventListener("keydown", (e) => {
         if (e.key === "Enter" && !e.shiftKey) {
@@ -917,11 +919,23 @@ export function showQuestion(requestId: string, questions: Question[]): void {
     respondToQuestion({ type: "question.respond", requestId, answers: [], cancelled: true });
   };
   btns.appendChild(skip);
-  if (!oneTap) {
+  {
     const submit = document.createElement("button");
     submit.className = "q-btn submit";
     submit.textContent = questions.length > 1 ? "Submit answers" : "Submit";
     submit.onclick = send;
+    // One-tap questions are answered by tapping an option, so Submit stays out of the way — until
+    // the user types a custom answer. Enter alone used to be the ONLY way to send that text, and
+    // virtual-keyboard Enter is unreliable on Android/PWA (especially mid-IME-composition), which
+    // left a typed answer with no visible way out except Skip.
+    if (oneTap) {
+      submit.hidden = true;
+      for (const other of otherFields) {
+        other.addEventListener("input", () => {
+          submit.hidden = !otherFields.some((f) => f.value.trim());
+        });
+      }
+    }
     btns.appendChild(submit);
   }
   card.appendChild(btns);
