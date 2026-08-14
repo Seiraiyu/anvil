@@ -871,6 +871,15 @@ async function reassignPlan(id: string): Promise<void> {
 
 /** Re-plan linked Todoist projects on every connected server; stream progress into the log. */
 async function runAutopilot(): Promise<void> {
+  // Re-entrancy guard. busy() only disables the Run button for the lifetime of ONE call, and the
+  // button is recreated (enabled) every time the Autopilot view is reopened — while a fleet run
+  // legitimately keeps going in the background for minutes. Without this, a second click reset the
+  // shared log/results out from under the live run, and its own finally cleared runState.running
+  // early, so the spinner reported "done" while the first run was still executing.
+  if (runState.running) {
+    toast("An autopilot run is already in progress");
+    return;
+  }
   // Only servers new enough to run the autopilot pipeline — an older member would just reject it.
   const targets = orderedServers().filter((s) => s.sock.isOpen() && serverSupports(s, "autopilot"));
   if (!targets.length) {
@@ -1045,8 +1054,12 @@ async function saveSchedule(): Promise<void> {
     }
     const failed = results.filter((r) => r.status === "rejected" || (r.status === "fulfilled" && r.value.type === "command.error")).length;
     closeModal();
-    if (!enabled) toast("Scheduled run off");
-    else if (failed) toast(`Schedule saved on ${targets.length - failed}/${targets.length} servers`);
+    // Partial failure is reported for BOTH directions. Turning the schedule off used to short-circuit
+    // to an unconditional "Scheduled run off", so a member that was slow or offline during the save
+    // stayed scheduled while the modal claimed success — the worst way to get a surprise 3am run.
+    const what = enabled ? "Schedule saved" : "Scheduled run off";
+    if (failed) toast(`${what} on ${targets.length - failed}/${targets.length} servers`);
+    else if (!enabled) toast(what);
     else toast(targets.length > 1 ? `Schedule saved on all ${targets.length} servers` : "Schedule saved");
   } catch (err) {
     toast(`Couldn't save schedule: ${err instanceof Error ? err.message : String(err)}`);
