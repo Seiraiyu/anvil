@@ -1,6 +1,6 @@
 import type { ServerWebSocket } from "bun";
 import type { rest, PermissionDecision } from "@protocol";
-import { UPDATE_API_VERSION } from "@protocol";
+import { MAX_ATTACHMENT_BYTES, UPDATE_API_VERSION } from "@protocol";
 import { AccountStore, resolveAuthStatus } from "../auth/accounts";
 import { newId } from "../util/ids";
 import { dispatch } from "./dispatch";
@@ -538,6 +538,13 @@ export function createServer(opts: ServerOptions): ServerHandle {
           // perfectly healthy. Pre-existing, but the Servers tab now actively tells people to press that
           // button when a member is out of date, so it went from rare to routine.
           idleTimeout: 120,
+          // Attachments (§6.5) ride as base64 inside a JSON body, which inflates the payload by ~4/3.
+          // Bun's implicit 128 MB default therefore cut uploads off at ~96 MB of actual file, and it
+          // rejects oversized bodies itself — the route never runs, so the client got a bodyless 413
+          // and showed a bare "Upload failed". Size the ceiling from the shared limit (plus the
+          // inflation and the JSON envelope) so the boundary is deliberate and the client's
+          // pre-flight check is the thing users actually hit.
+          maxRequestBodySize: Math.ceil(MAX_ATTACHMENT_BYTES * (4 / 3)) + 1024 * 1024,
           async fetch(req, srv) {
             const url = new URL(req.url);
             const isApi = url.pathname.startsWith("/api/");

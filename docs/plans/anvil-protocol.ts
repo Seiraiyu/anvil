@@ -405,6 +405,17 @@ export interface AttachmentRef {
 }
 
 /**
+ * Largest single attachment the upload path accepts, in bytes (§6.5). Shared so the client can
+ * reject an oversized file BEFORE reading it into memory and the daemon can size its request-body
+ * ceiling from the same number — the two silently disagreeing is what made a big upload fail with a
+ * bodyless 413 and a bare "Upload failed" toast.
+ *
+ * The wire cost is ~4/3 this value: `POST /api/sessions/:id/attachments` carries the bytes as base64
+ * inside JSON, so the daemon's `maxRequestBodySize` must exceed it with room for that inflation.
+ */
+export const MAX_ATTACHMENT_BYTES = 64 * 1024 * 1024;
+
+/**
  * A deliverable file the agent produced in its worktree (a report, export, archive, image…),
  * surfaced in the conversation as a download card "from the model" (§8). `downloadUrl` is a
  * daemon-relative REST path; clients resolve it to absolute. `taildropped` is true when the
