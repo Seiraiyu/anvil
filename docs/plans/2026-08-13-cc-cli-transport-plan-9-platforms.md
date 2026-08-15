@@ -8,15 +8,16 @@
 | Task | Description | Status | Tested | Pushed |
 |------|-------------|--------|--------|--------|
 | 1 | `scripts/service.sh` path: verify install flow bootstraps a managed CC when none exists (both platforms) | done (gap found + closed) | yes | no |
-| 2 | Linux/WSL2 pass: fresh install → session → phone dialog → CC update → rollback, on this machine | pending | no | no |
-| 3 | macOS pass: same script on a Mac; LaunchAgent + `tailscale serve` unchanged from upstream | pending | no | no |
+| 2 | Linux/WSL2 pass: fresh install → session → phone dialog → CC update → rollback, on this machine | blocked on operator (runbook ready) | no | no |
+| 3 | macOS pass: same script on a Mac; LaunchAgent + `tailscale serve` unchanged from upstream | blocked on operator (runbook ready) | no | no |
 | 4 | Docs: rewrite `docs/ARCHITECTURE.md` "one big idea" section (SDK → CLI-direct), README auth section (defer-to-CC), new CC-updater section; note the CLI-version display for terminal-vs-daemon skew (design §4.8 nuance) | done | yes | no |
 | 5 | Release: version bump per `RELEASING.md`, release notes via `scripts/gen-release-notes.ts`, tag | pending | no | no |
-| 6 | Housekeeping: upstream license issue outcome recorded; upstream merge dry-run (`git merge upstream/main --no-commit`) to size the drift | pending | no | no |
+| 6 | Housekeeping: upstream license issue outcome recorded; upstream merge dry-run (`git merge upstream/main --no-commit`) to size the drift | done (license needs an owner decision) | yes | no |
 
 Notes:
 - CI (Bun 1.3.14 pinned, `.github/workflows/ci.yml`) already runs on Linux; the mac pass is manual against real hardware — record results in the phase table, don't fake a runner.
 - WSL2 specifics to verify on Task 2: Tailscale reachability from phone → WSL2 daemon (mirrored networking or port-proxy), and that `~/.claude` used by the daemon is the same one the user's terminal CC uses.
+- Tasks 2 and 3 are executed from [`2026-08-13-cc-cli-transport-plan-9-platform-runbook.md`](2026-08-13-cc-cli-transport-plan-9-platform-runbook.md) — step-by-step, with a Result column to fill in and a restore procedure, since the fresh-machine simulation tears down a working install.
 
 **Phase acceptance (design §5.9):** fresh install on Linux and macOS via `service.sh` reaches a working session on both.
 
@@ -68,3 +69,42 @@ than fixed here: `wireCcUpdate` labels the row `Claude Code: not installed` when
 fine on the PATH copy while the card implies nothing is there. The honest fix is an additive
 `/api/cc/v1/status` field reporting the effective binary + its version (`managed | path | override`),
 which is a REST-contract change this task shouldn't smuggle in.
+
+**Task 6 — housekeeping.**
+
+*Upstream license (design open question 4): asked-for outcome never happened.* `gte619n/anvil`
+reports `license: null` — still no license file, still all-rights-reserved by default — and no
+license request exists in its issues (searched open + closed). The interview decision was "fork
+proceeds; ask upstream in parallel"; the *asking* half was never done. **This is now blocking a
+clean release, not merely untidy:** this fork's `README.md` §License says "MIT", which is a claim
+this fork is not in a position to make about upstream's code. Two honest resolutions, both the
+owner's call, neither taken unilaterally here:
+1. File the request upstream (MIT/Apache-2.0) and hold the MIT claim until it lands, or
+2. Qualify the README now — state the fork's *own* additions' terms and record that the upstream
+   base is unlicensed.
+No issue was filed on a third party's repository without a decision.
+
+*Upstream merge dry-run (`git merge upstream/main --no-commit --no-ff`, aborted clean).* Drift is
+**much smaller than the 66-commit divergence suggests**. `upstream/main` is `e6e271c`, five commits
+ahead of merge-base `e68591c` (the loops-circuit work, +5937/-61 across 47 files). The merge stops
+on exactly **three** conflicts:
+
+| File | Kind | Size |
+|---|---|---|
+| `anvild/src/server/identity.ts` | UU — both sides append a capability (`cc-update` vs `loops`) | trivial, keep both |
+| `anvild/test/web/transcript-serialize.test.ts` | UU — comment-only, upstream annotates a `30_000` timeout we also touched | trivial |
+| `anvild/src/agent/query.ts` | **DU — deleted by us, modified by them** | the real work |
+
+Only the third is substantive, and it is the predicted shape: plan 7 deleted `runAgentQuery` with
+the SDK, and upstream's loops-intake feature (#199) then *extended* it — an `onStep` callback firing
+per `tool_use` plus a `toolDetail()` helper, so a run can stream its real activity. Upstream now has
+four callers (`loops/intake-model.ts`, `session/loop-service.ts`, `pipeline/adapters.ts`,
+`pipeline/phases.ts`); ours route through `cc/oneshot.ts`. So the port is: add an `onStep`-equivalent
+to `runCcQuery` — which is strictly easier there, since stream-json already delivers every
+`tool_use` block the callback wants and `oneshot.ts` is already parsing them for `ExitPlanMode`.
+**Estimate: a day, dominated by the loops feature's own surface, not by the transport.** The
+transport swap did not make upstream merges expensive; the one file it makes expensive is the one
+file it deleted.
+
+Recommendation: do the merge as its own change *before* the release, not folded into it — the
+conflict set is small enough today that letting it age is the only way it gets hard.
