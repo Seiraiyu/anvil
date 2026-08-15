@@ -101,9 +101,9 @@ const send = (method: string, params: unknown = {}): void => ws.send(JSON.string
 // the sidebar tree-render path with nested members (anvil-team-support.md §5) — the "render must not
 // throw with a team present" guard. The client hydrates `anvil.sessions` from localStorage offline.
 const teamSeed = [
-  { id: "lead1", title: "Ship feature X", cwd: "/w/lead", source: "fresh-worktree", model: "opus", autonomy: "mostly-autonomous", status: "idle", createdAt: "", lastActivityAt: "", usage: { inputTokens: 0, outputTokens: 0, turns: 0 }, teamRole: "lead", team: { integration: "combined-pr", maxConcurrentMembers: 3 } },
-  { id: "m1", title: "Auth", cwd: "/w/m1", source: "fresh-worktree", model: "opus", autonomy: "mostly-autonomous", status: "running_tool", createdAt: "", lastActivityAt: "", usage: { inputTokens: 0, outputTokens: 0, turns: 0 }, parentId: "lead1", teamRole: "member", memberTask: "wire up oauth" },
-  { id: "m2", title: "Tests", cwd: "/w/m2", source: "fresh-worktree", model: "opus", autonomy: "mostly-autonomous", status: "awaiting_permission", createdAt: "", lastActivityAt: "", usage: { inputTokens: 0, outputTokens: 0, turns: 0 }, parentId: "lead1", teamRole: "member", memberTask: "add coverage" },
+  { id: "lead1", title: "Ship feature X", cwd: "/w/lead", source: "fresh-worktree", model: "opus", permissionMode: "bypassPermissions", status: "idle", createdAt: "", lastActivityAt: "", usage: { inputTokens: 0, outputTokens: 0, turns: 0 }, teamRole: "lead", team: { integration: "combined-pr", maxConcurrentMembers: 3 } },
+  { id: "m1", title: "Auth", cwd: "/w/m1", source: "fresh-worktree", model: "opus", permissionMode: "bypassPermissions", status: "running_tool", createdAt: "", lastActivityAt: "", usage: { inputTokens: 0, outputTokens: 0, turns: 0 }, parentId: "lead1", teamRole: "member", memberTask: "wire up oauth" },
+  { id: "m2", title: "Tests", cwd: "/w/m2", source: "fresh-worktree", model: "opus", permissionMode: "bypassPermissions", status: "awaiting_permission", createdAt: "", lastActivityAt: "", usage: { inputTokens: 0, outputTokens: 0, turns: 0 }, parentId: "lead1", teamRole: "member", memberTask: "add coverage" },
 ];
 
 const allConsole: string[] = [];

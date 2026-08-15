@@ -57,7 +57,7 @@
 // on the versioned WS channel — the web client's "Update Anvil" rides POST /api/daemon/update (rest.
 // DaemonUpdateResponse), which carries no protocol version, so recovery can't be blocked by the very
 // skew it exists to repair. The `daemon.update` WS command remains for native clients.
-export const PROTOCOL_VERSION = 4 as const;
+export const PROTOCOL_VERSION = 5 as const;
 export type ProtocolVersion = typeof PROTOCOL_VERSION;
 
 /**
@@ -116,12 +116,19 @@ export const modelLabel = (m: Model): string => MODELS.find((x) => x.id === m)?.
 /** Whether a value is one of the models a session may switch to. */
 export const isModel = (m: unknown): m is Model => MODELS.some((x) => x.id === m);
 
-export type AutonomyPolicy =
-  | "mostly-autonomous" // default: auto-allow; prompt only on the danger list (§6.6)
-  | "allowlist" // auto-allow reads/searches/safe cmds; prompt for writes/net
-  | "prompt-all" // ask on every tool use
-  | "bypass"; // DANGER: never prompt — allow every tool, incl. the danger list
-  //           (the daemon equivalent of `claude --dangerously-skip-permissions`)
+/**
+ * Claude Code's native permission modes (cc-cli-transport §4.7 delta 1 — replaces the old
+ * autonomy dial). Maps 1:1 to the CLI's `--permission-mode`; the CLI's own engine decides
+ * which calls prompt, and prompts route to the daemon's approve tool (design §4.4).
+ */
+export type PermissionMode =
+  | "default" // CC's standard engine: safe tools auto-allowed, everything else prompts
+  | "acceptEdits" // file edits auto-accepted; other prompt-worthy tools still prompt
+  | "plan" // read-only planning: edits/writes blocked
+  | "bypassPermissions"; // DANGER: never prompt — allow every tool
+
+export const PERMISSION_MODES: readonly PermissionMode[] = ["default", "acceptEdits", "plan", "bypassPermissions"];
+export const isPermissionMode = (m: unknown): m is PermissionMode => PERMISSION_MODES.includes(m as PermissionMode);
 
 export type SessionSource = "existing-dir" | "fresh-worktree";
 
@@ -195,10 +202,12 @@ export interface Usage {
 }
 
 /**
- * Live context-window occupancy for the current topic, read from the Agent SDK's `getContextUsage()`
- * (the same numbers Claude Code's own context bar shows) — NOT cumulative billing. `used` is the tokens
- * currently in the window (system prompt + tools + messages); `max` is the model's usable window. Absent
- * until the first turn reports, and reset when the topic is cleared or the context is compacted. (§context)
+ * Live context-window occupancy for the current topic — NOT cumulative billing. `used` is the tokens
+ * currently in the window (system prompt + tools + messages); `max` is the model's usable window.
+ * SDK transport reads the Agent SDK's `getContextUsage()`; the CLI-direct transport (cc-cli-transport
+ * §4.2) derives it from the turn's `result` message (input+cache tokens vs `modelUsage.contextWindow`) —
+ * same meaning, same meter. Absent until the first turn reports, and reset when the topic is cleared
+ * or the context is compacted. (§context)
  */
 export interface ContextUsage {
   used: number;
@@ -206,8 +215,10 @@ export interface ContextUsage {
 }
 
 /**
- * One rate-limit window's utilization, read from the Agent SDK's usage endpoint (§3) — the same
- * windows shown in claude.ai → Settings → Usage. `utilization` is a percentage, 0–100.
+ * One rate-limit window's utilization — the same windows shown in claude.ai → Settings → Usage.
+ * `utilization` is a percentage, 0–100. SDK transport reads the Agent SDK's usage endpoint (§3);
+ * the CLI-direct transport has no stream-json equivalent (the CLI's `rate_limit_event` carries no
+ * utilization), so under it the gauge keeps its last-known value (cc-cli-transport plan 3 task 6).
  */
 export interface RateWindow {
   utilization: number; // 0–100: percent of the window consumed
@@ -270,11 +281,15 @@ export interface Session {
   worktree?: Worktree; // present when source === "fresh-worktree"
   git?: GitStatus;
   model: Model; // default "opus" (§3)
-  autonomy: AutonomyPolicy; // default "mostly-autonomous" (§6.6)
+  permissionMode: PermissionMode; // default "bypassPermissions" (matches the old mostly-autonomous behavior)
   adversarialReview?: boolean; // opt-in: when planning, competing OpenRouter models critique the plan
   // before execution (the autopilot adversarial panel, brought to interactive sessions). Advisory only;
   // needs an OpenRouter key. Default off. (§6.6 / adversarial panel)
   claudeSessionId?: string; // Claude Code's own --resume id
+  /** A real terminal owns the conversation right now (cc plan 6 attach, additive v5): the attach
+   *  PTY is running `claude --resume`; headless prompts are rejected until detach. Runtime-only —
+   *  cleared on daemon restart (the PTY died with the process). */
+  attached?: boolean;
   status: SessionStatus;
   createdAt: Iso8601;
   lastActivityAt: Iso8601;
@@ -364,7 +379,13 @@ export type ContentBlock =
   | { kind: "tool_use"; toolUseId: ToolUseId; name: string; input: unknown }
   // A full-width topic boundary (§0.6, "new topic"): a labelled rule that visually clears the pane
   // without deleting scrollback. `note` is an optional muted sub-line under the label.
-  | { kind: "divider"; label: string; note?: string };
+  | { kind: "divider"; label: string; note?: string }
+  // CC output this daemon version doesn't recognize (cc-cli-transport §4.7 delta 3): an unknown
+  // top-level stream-json type or an unknown content-block type inside an assistant message.
+  // Never dropped — rendered as a collapsed raw-JSON card. `ccType` is the CC-side type string;
+  // `json` is the pretty-printed payload, size-capped by the producer. Rides assistant.message
+  // (and therefore the snapshot's "assistant" arm) — deliberately NOT a new event type.
+  | { kind: "fallback"; ccType: string; json: string };
 
 /** One conversation log entry — what `conversation.snapshot` replays (§6.4).
  *  `ts` is the wall-clock time the entry was first emitted, carried through so a replayed
@@ -382,6 +403,20 @@ export interface AttachmentRef {
   name: string;
   path: string; // server-side path under <cwd>/.anvil/attachments/
 }
+
+/**
+ * Largest single attachment the upload path accepts, in bytes (§6.5). Shared so the client can
+ * reject an oversized file up front and the daemon can size its request-body ceiling from the same
+ * number — the two silently disagreeing is what made a big upload fail with a bodyless 413 behind a
+ * bare "Upload failed" toast.
+ *
+ * Uploads stream: `POST /api/sessions/:id/attachments` takes the raw bytes as the request body
+ * (name/mediaType in the query string) and the daemon writes them straight to disk, so neither side
+ * holds the file in memory and the wire cost is 1:1. The legacy base64-in-JSON body is still
+ * accepted for older clients, and costs ~4/3 — which is why the daemon's ceiling carries that
+ * headroom.
+ */
+export const MAX_ATTACHMENT_BYTES = 512 * 1024 * 1024;
 
 /**
  * A deliverable file the agent produced in its worktree (a report, export, archive, image…),
@@ -918,6 +953,11 @@ export interface MessageUserEvent extends Envelope, SessionScoped {
    *  the server can dedupe a re-flushed offline send (exactly-once), and echoed so the client can retire
    *  the matching optimistic bubble instead of rendering a duplicate. */
   cid?: Cid;
+  /** The CC transcript-line uuid this event corresponds to (cc plan 6, additive). Present on live
+   *  CLI-transport events and on reconciler backfills; the transcript reconciler dedupes by it so
+   *  replay/backfill never double-applies. Absent on daemon-authored user prompts (CC mints the
+   *  uuid only when the turn spawns) — those are matched by text instead. Ignored by clients. */
+  ccUuid?: string;
 }
 /** Streaming token chunk. Raw markdown text; client renders incrementally (Streamdown-style). */
 export interface AssistantDeltaEvent extends Envelope, SessionScoped {
@@ -928,18 +968,24 @@ export interface AssistantDeltaEvent extends Envelope, SessionScoped {
 export interface AssistantMessageEvent extends Envelope, SessionScoped {
   type: "assistant.message";
   blocks: ContentBlock[];
+  /** CC transcript-line uuid (cc plan 6, additive) — reconciler dedupe key. Ignored by clients. */
+  ccUuid?: string;
 }
 export interface ToolUseEvent extends Envelope, SessionScoped {
   type: "tool.use";
   toolUseId: ToolUseId;
   name: string;
   input: unknown;
+  /** CC transcript-line uuid (cc plan 6, additive) — reconciler dedupe key. Ignored by clients. */
+  ccUuid?: string;
 }
 export interface ToolResultEvent extends Envelope, SessionScoped {
   type: "tool.result";
   toolUseId: ToolUseId;
   content: string;
   isError: boolean;
+  /** CC transcript-line uuid (cc plan 6, additive) — reconciler dedupe key. Ignored by clients. */
+  ccUuid?: string;
 }
 export interface PermissionRequestEvent extends Envelope, SessionScoped {
   type: "permission.request";
@@ -1132,7 +1178,7 @@ export interface SessionCreateCmd extends Envelope, Correlated {
   title?: string;
   environmentId?: string; // the Environment this came from (for grouping/labeling)
   model?: Model; // defaults to "opus"
-  autonomy?: AutonomyPolicy; // defaults to "mostly-autonomous"
+  permissionMode?: PermissionMode; // defaults to "bypassPermissions" (the old mostly-autonomous behavior)
   adversarialReview?: boolean; // defaults to false (adversarial plan review; needs an OpenRouter key)
   // ── Teams: create this session as a team lead (see docs/plans/anvil-team-support.md). A lead is an
   //    ordinary session that also gets the lead orchestration MCP tools + an integration/concurrency
@@ -1196,10 +1242,10 @@ export interface SessionSetModelCmd extends Envelope, Correlated {
   sessionId: SessionId;
   model: Model;
 }
-export interface SessionSetAutonomyCmd extends Envelope, Correlated {
-  type: "session.set_autonomy";
+export interface SessionSetPermissionModeCmd extends Envelope, Correlated {
+  type: "session.set_permission_mode";
   sessionId: SessionId;
-  policy: AutonomyPolicy;
+  mode: PermissionMode;
 }
 export interface SessionSetAdversarialReviewCmd extends Envelope, Correlated {
   type: "session.set_adversarial_review";
@@ -1422,7 +1468,7 @@ export interface AutopilotPlanSessionCmd extends Envelope, Correlated {
   // the design so far, and any open questions; Claude works the plan out (and can build) → autopilot.started
   workUnitId: string;
   model?: Model; // defaults to "opus"
-  autonomy?: AutonomyPolicy; // defaults to "mostly-autonomous" (interactive: it asks the open questions, doesn't blast ahead)
+  permissionMode?: PermissionMode; // defaults to "default" (interactive: it asks the open questions, doesn't blast ahead)
 }
 export interface AutopilotDismissCmd extends Envelope, Correlated {
   type: "autopilot.dismiss"; // reject a plan: label its tasks anvil:dismissed, drop the card
@@ -1432,7 +1478,7 @@ export interface AutopilotStartCmd extends Envelope, Correlated {
   type: "autopilot.start"; // create a worktree session seeded with the plan and start it → autopilot.started
   workUnitId: string;
   model?: Model; // defaults to "opus"
-  autonomy?: AutonomyPolicy; // defaults to "bypass" (auto-start working without permission stalls)
+  permissionMode?: PermissionMode; // defaults to "bypassPermissions" (auto-start working without permission stalls)
 }
 export interface AutopilotPipelineStartCmd extends Envelope, Correlated {
   type: "autopilot.pipeline.start"; // run the autonomous dev pipeline (§4) for a unit → autopilot.pipeline.result
@@ -1541,6 +1587,28 @@ export interface TerminalCloseCmd extends Envelope, Correlated {
   termId?: string; // multi-terminal (design 2026-08-08); absent = "1", the pre-multi-term default
 }
 
+// 5d². Terminal attach to the CC conversation (cc plan 6, design §4.9)
+
+/** Attach the session's REAL Claude Code conversation to a PTY: spawns `claude --resume <id>`
+ *  in a dedicated terminal (termId `CC_ATTACH_TERM_ID`, rides the normal terminal.* channel and
+ *  chip roster). Only from `idle` with no parked prompt cards; while attached, `prompt.send` is
+ *  rejected — the terminal owns the conversation. Additive (v5). */
+export interface CcAttachCmd extends Envelope, Correlated {
+  type: "cc.attach";
+  sessionId: SessionId;
+  cols: number;
+  rows: number;
+}
+/** End the terminal takeover: kills the attach PTY, reconciles the transcript back into the
+ *  event log (turns typed in the terminal appear in every client's history), returns the
+ *  session to `idle`. Also implied by the PTY exiting on its own (user quit CC). */
+export interface CcDetachCmd extends Envelope, Correlated {
+  type: "cc.detach";
+  sessionId: SessionId;
+}
+/** The reserved termId of the attach PTY (never a plain shell). */
+export const CC_ATTACH_TERM_ID = "cc";
+
 // 5e. Notifications (§6.7)
 
 export interface PushRegisterCmd extends Envelope, Correlated {
@@ -1584,7 +1652,7 @@ export type ClientCommand =
   | SessionNewTopicCmd
   | SessionAccountSetCmd
   | SessionSetModelCmd
-  | SessionSetAutonomyCmd
+  | SessionSetPermissionModeCmd
   | SessionSetAdversarialReviewCmd
   | TeamPlanApproveCmd
   | TeamPlanRejectCmd
@@ -1646,6 +1714,8 @@ export type ClientCommand =
   | DaemonUpdateCmd
   // terminal
   | TerminalOpenCmd
+  | CcAttachCmd
+  | CcDetachCmd
   | TerminalInputCmd
   | TerminalResizeCmd
   | TerminalCloseCmd

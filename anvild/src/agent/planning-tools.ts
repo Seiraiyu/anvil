@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createSdkMcpServer, tool, type McpSdkServerConfigWithInstance, type SdkMcpToolDefinition } from "@anthropic-ai/claude-agent-sdk";
+import { defineTool, type AnvilTool, type AnvilToolServer } from "../cc/tool-host";
 
 /**
  * In-process MCP tools given ONLY to an autopilot **planning** session — the interactive
@@ -30,14 +30,14 @@ export const PLANNING_MCP_SERVER_NAME = "anvil_planning";
 /** Tool ids as the SDK exposes them (`mcp__<server>__<tool>`), for the driver allowlist. */
 export const PLANNING_TOOL_IDS = ["save_plan", "run_pipeline"].map((t) => `mcp__${PLANNING_MCP_SERVER_NAME}__${t}`);
 
-export function buildPlanningToolsServer(deps: PlanningToolDeps): McpSdkServerConfigWithInstance {
-  return createSdkMcpServer({ name: PLANNING_MCP_SERVER_NAME, version: "1.0.0", tools: planningTools(deps) });
+export function buildPlanningToolsServer(deps: PlanningToolDeps): AnvilToolServer {
+  return { name: PLANNING_MCP_SERVER_NAME, tools: planningTools(deps) };
 }
 
 /** The planning tool definitions (exported so tests can invoke handlers without a live SDK server). */
-export function planningTools(deps: PlanningToolDeps): SdkMcpToolDefinition<any>[] {
+export function planningTools(deps: PlanningToolDeps): AnvilTool[] {
   return [
-    tool(
+    defineTool(
       "save_plan",
       "Save the settled implementation plan back to this autopilot work unit (and post it as a Todoist " +
         "comment). Call this once you and the user have worked out HOW to build the task — before you start " +
@@ -59,7 +59,7 @@ export function planningTools(deps: PlanningToolDeps): SdkMcpToolDefinition<any>
         }
       },
     ),
-    tool(
+    defineTool(
       "run_pipeline",
       "Engage the autonomous review→development→testing pipeline for this work unit: it implements the " +
         "saved plan in a fresh worktree with multi-model author/adversary gates and opens a PR. Call this " +

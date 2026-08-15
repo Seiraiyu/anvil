@@ -91,7 +91,7 @@ test("session.create (existing-dir) → session.created with cid", async () => {
   expect(r.cid).toBe("c5");
   expect(r.session.id).toMatch(/^sess_/);
   expect(r.session.model).toBe("opus");
-  expect(r.session.autonomy).toBe("mostly-autonomous");
+  expect(r.session.permissionMode).toBe("bypassPermissions");
 });
 
 test("on open: server.hello first, then resume.watermarks, then session.list", async () => {

@@ -36,3 +36,7 @@ docs/plans/assets/team-verify/
 
 # generated deck exports (rebuild via headless-chrome slide capture)
 anvild/web/preview/deck/*.pdf
+
+# Local e2e browser-test output (screenshots + report) — not part of the product
+e2e-screenshots/
+e2e-test-report.md

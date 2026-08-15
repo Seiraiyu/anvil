@@ -85,7 +85,7 @@ test("the built client boots for a returning user (activeId set) — no init cra
         cwd: "/tmp/x",
         source: "existing-dir",
         model: "sonnet",
-        autonomy: "mostly-autonomous",
+        permissionMode: "bypassPermissions",
         status: "idle",
         createdAt: "2026-08-01T00:00:00.000Z",
         lastActivityAt: "2026-08-01T00:00:00.000Z",

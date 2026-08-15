@@ -8,6 +8,8 @@ export interface Config {
   stateDir: string;
   /** Where the daemon clones repos added by git URL. Independent of the app's install location. */
   clonesDir: string;
+  /** Root of the managed Claude Code install tree (versions/ + current/previous symlinks). */
+  ccDir: string;
   /** Warn threshold as a fraction (0–1) of any rate-limit window's utilization (arch §3). */
   warnFraction: number;
   /** Soft-stop threshold as a fraction (0–1) of the 7-day window's utilization (arch §3). */
@@ -112,6 +114,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     port: numEnv(env.ANVIL_PORT, 7701, "ANVIL_PORT", { min: 1, max: 65535, integer: true }),
     stateDir: expandHome(env.ANVIL_STATE_DIR ?? "~/.anvil", home),
     clonesDir: expandHome(env.ANVIL_CLONES_DIR ?? "~/.anvil/repos", home),
+    ccDir: expandHome(env.ANVIL_CC_DIR ?? "~/.anvil/cc", home),
     warnFraction: numEnv(env.ANVIL_BUDGET_WARN, 0.8, "ANVIL_BUDGET_WARN", { min: 0, max: 1 }),
     softStopFraction: numEnv(env.ANVIL_BUDGET_SOFTSTOP, 0.95, "ANVIL_BUDGET_SOFTSTOP", { min: 0, max: 1 }),
     openRouterApiKey,

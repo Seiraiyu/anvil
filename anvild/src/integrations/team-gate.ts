@@ -1,7 +1,7 @@
-import type { AutonomyPolicy } from "@protocol";
-/** The team-plan gate rides the session's autonomy dial: only `bypass` auto-approves. */
-export function shouldAutoApprove(autonomy: AutonomyPolicy): boolean {
-  return autonomy === "bypass";
+import type { PermissionMode } from "@protocol";
+/** The team-plan gate rides the session's permission mode: only `bypassPermissions` auto-approves. */
+export function shouldAutoApprove(mode: PermissionMode): boolean {
+  return mode === "bypassPermissions";
 }
 
 /** Pause NEW member spawns while the subscription budget is in its warn zone (running members finish),

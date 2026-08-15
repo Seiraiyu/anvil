@@ -916,3 +916,141 @@ export function wireDaemonUpdate(srv: Server): void {
     }
   });
 }
+
+// ── Managed Claude Code card row (cc-cli-transport design §4.8) ──────────────────────────────────
+
+type CcStatusBody = { phase: string; current?: string; previous?: string; target?: string; reason?: string };
+
+/** The server card's Claude Code row — empty string when the daemon predates the capability,
+ *  so old servers show no dead controls. settings.ts splices this into serverCardHtml. */
+export function ccCardRowHtml(srv: Server): string {
+  if (!serverSupports(srv, "cc-update")) return "";
+  const id = cssId(srv.url);
+  return `<div class="git-row" style="margin-top:6px">
+    <span class="small muted" id="cc-version-${id}">Claude Code: …</span>
+    <button class="mini" id="cc-check-${id}">${icon("refresh")} Check</button>
+    <button class="mini primary" id="cc-update-${id}" hidden>Update</button>
+    <button class="mini" id="cc-rollback-${id}" hidden>${icon("undo")} Rollback</button>
+  </div>
+  <pre class="git-output" id="cc-output-${id}" hidden></pre>`;
+}
+
+/** Wire one card's Claude Code row: fill in the current version, Check → reveal Update when the
+ *  release bucket is ahead, Update → POST apply then poll /status every 2s to a terminal phase
+ *  (healthy/error/rolled-back — poll-don't-push, design delta 4), Rollback whenever a `previous`
+ *  install exists. No-ops when the row isn't in the DOM (capability-gated at render). */
+export function wireCcUpdate(srv: Server): void {
+  const id = cssId(srv.url);
+  const label = document.getElementById(`cc-version-${id}`);
+  const checkBtn = document.getElementById(`cc-check-${id}`) as HTMLButtonElement | null;
+  const updateBtn = document.getElementById(`cc-update-${id}`) as HTMLButtonElement | null;
+  const rollbackBtn = document.getElementById(`cc-rollback-${id}`) as HTMLButtonElement | null;
+  const out = document.getElementById(`cc-output-${id}`);
+  if (!label || !checkBtn || !updateBtn || !rollbackBtn || !out) return;
+
+  const status = async (): Promise<CcStatusBody> =>
+    (await (await serverFetch(srv.url, "/api/cc/v1/status")).json()) as CcStatusBody;
+
+  const refresh = async (): Promise<void> => {
+    try {
+      const s = await status();
+      label.textContent = `Claude Code: ${s.current ?? "not installed"}`;
+      rollbackBtn.hidden = !s.previous;
+      if (s.previous) rollbackBtn.title = `Back to ${s.previous}`;
+    } catch {
+      label.textContent = "Claude Code: unreachable";
+    }
+  };
+  void refresh();
+
+  /** Poll to a terminal phase, painting each phase into the card's output pane. */
+  const pollToTerminal = async (): Promise<void> => {
+    out.hidden = false;
+    try {
+      for (;;) {
+        const s = await status();
+        out.textContent = `${s.phase}${s.target ? ` → ${s.target}` : ""}${s.reason ? `\n${s.reason}` : ""}`;
+        if (s.phase === "healthy") {
+          toast(`${esc(srv.name)}: Claude Code ${s.target ?? s.current ?? ""} ready.`);
+          return;
+        }
+        if (s.phase === "rolled-back") {
+          toast(`${esc(srv.name)}: Claude Code rolled back.`);
+          return;
+        }
+        if (s.phase === "error") {
+          toast("Claude Code update failed — see the server card.");
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+    } catch (e) {
+      out.textContent = `status poll failed: ${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+      void refresh();
+    }
+  };
+
+  checkBtn.addEventListener("click", async () => {
+    checkBtn.disabled = true;
+    try {
+      const c = (await (await serverFetch(srv.url, "/api/cc/v1/check")).json()) as {
+        current?: string;
+        latest: string;
+        updateAvailable: boolean;
+      };
+      if (c.updateAvailable) {
+        updateBtn.hidden = false;
+        updateBtn.textContent = c.current ? `Update to ${c.latest}` : `Install ${c.latest}`;
+        updateBtn.dataset.target = c.latest;
+      } else {
+        toast(`${esc(srv.name)}: Claude Code ${c.latest} is current.`);
+      }
+    } catch (e) {
+      out.hidden = false;
+      out.textContent = `check failed: ${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+      checkBtn.disabled = false;
+    }
+  });
+
+  updateBtn.addEventListener("click", async () => {
+    updateBtn.disabled = true;
+    try {
+      await serverFetch(srv.url, "/api/cc/v1/apply", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(updateBtn.dataset.target ? { target: updateBtn.dataset.target } : {}),
+      });
+      await pollToTerminal();
+    } catch (e) {
+      out.hidden = false;
+      out.textContent = `apply failed: ${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+      updateBtn.disabled = false;
+      updateBtn.hidden = true;
+    }
+  });
+
+  rollbackBtn.addEventListener("click", async () => {
+    rollbackBtn.disabled = true;
+    try {
+      const r = await serverFetch(srv.url, "/api/cc/v1/rollback", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      if (!r.ok) {
+        out.hidden = false;
+        out.textContent = `rollback failed: HTTP ${r.status}`;
+        return;
+      }
+      await pollToTerminal();
+    } catch (e) {
+      out.hidden = false;
+      out.textContent = `rollback failed: ${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+      rollbackBtn.disabled = false;
+    }
+  });
+}

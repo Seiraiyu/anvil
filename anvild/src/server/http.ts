@@ -1,6 +1,6 @@
 import type { ServerWebSocket } from "bun";
 import type { rest, PermissionDecision } from "@protocol";
-import { UPDATE_API_VERSION } from "@protocol";
+import { MAX_ATTACHMENT_BYTES, UPDATE_API_VERSION } from "@protocol";
 import { AccountStore, resolveAuthStatus } from "../auth/accounts";
 import { newId } from "../util/ids";
 import { dispatch } from "./dispatch";
@@ -18,7 +18,6 @@ import {
   tailscaleWhois,
   type PeerTrust,
 } from "./pairing";
-import { bindDegradeStateDir } from "../auth/degrade";
 import { setClaudeToken } from "../auth/store";
 import { setOpenRouterKey } from "../auth/openrouter";
 import { FleetStore } from "../fleet/store";
@@ -27,6 +26,9 @@ import { Supervisor } from "../session/supervisor";
 import { UpdateStateStore } from "../daemon/update-state";
 import { updateApply, updateCheck, updateStatus, settleAfterBoot, type UpdateApiDeps } from "../daemon/update-api";
 import { isManaged, scheduleRestart, webBundleOk } from "../daemon/selfupdate";
+import { CcInstalls, officialDownloader, resolveLatestVersion } from "../cc/install";
+import { smokeTest } from "../cc/smoke";
+import { CcUpdater, CC_API_VERSION } from "../cc/update";
 import { FleetRolloutCoordinator, DesiredTargetStore, httpMemberUpdateClient } from "./fleet-rollout";
 import { FleetJobs } from "./fleet-jobs";
 import { resolveTargetSha } from "../daemon/selfupdate";
@@ -184,6 +186,11 @@ export interface ServerOptions {
   /** [BE2-15] Test-only override of the caller-identity resolver (the real one shells out to the
    *  tailscale CLI, which makes identity-gated routes untestable hermetically). */
   resolveIdentity?: () => Promise<{ trust: PeerTrust; reject?: string }>;
+  /** Root of the managed CC install tree (see `Config.ccDir`). Defaults to `<stateDir>/cc`. */
+  ccDir?: string;
+  /** Test-only injection of a fully-faked CC updater so /api/cc/v1/* is testable without the
+   *  network or a real claude binary (same convention as fleetNet/resolveIdentity). */
+  ccUpdater?: CcUpdater;
 }
 
 /** The fleet fan-out network surface the rotate/invite paths reach the tailnet through ([BE2-15]). */
@@ -210,9 +217,6 @@ export function createServer(opts: ServerOptions): ServerHandle {
   const fleetJobs = new FleetJobs();
   const accounts = opts.accounts ?? new AccountStore(opts.stateDir);
   const fleet = new FleetStore(opts.stateDir);
-  // Bind the degrade marker's home so a credential write from ANY path (a direct paste via
-  // `setClaudeToken`, a pair, a rotation) clears it without threading a state dir through (§4.6).
-  bindDegradeStateDir(opts.stateDir);
   /** This machine's join window — default closed, armed only by a human in its own UI (§5.1/§8.2). */
   const pairWindow = new PairingWindow();
   /** The hub this machine was joined by, for rotation gating only (HJ-26). */
@@ -223,6 +227,7 @@ export function createServer(opts: ServerOptions): ServerHandle {
     {
       stateDir: opts.stateDir,
       port: opts.port,
+      host: opts.host,
       accounts,
       pairedHub,
       // Lazy on purpose: `pushRosterInBackground` closes over `fleet`/`accounts`/`identity`, all of
@@ -248,6 +253,18 @@ export function createServer(opts: ServerOptions): ServerHandle {
   const updateState = new UpdateStateStore(opts.stateDir);
   const updateDeps: UpdateApiDeps = { state: updateState, webDir: WEB_DIR, isManaged, scheduleRestart };
   settleAfterBoot(updateDeps);
+
+  // Managed CC installs (cc-cli-transport design §4.8): versioned store under ccDir, smoke-gated
+  // updates, one-tap rollback. Real deps by default; tests inject `opts.ccUpdater`.
+  const ccUpdater =
+    opts.ccUpdater ??
+    new CcUpdater({
+      installs: new CcInstalls(opts.ccDir ?? join(opts.stateDir, "cc")),
+      download: officialDownloader(),
+      smoke: smokeTest,
+      resolveLatest: () => resolveLatestVersion(),
+      stateFile: join(opts.stateDir, "cc-update-state.json"),
+    });
 
   // Hub-orchestrated fleet rollout (spec §4.4): pins one SHA, fans it out to reachable members over the
   // frozen API, updates the hub itself last. The desired target persists so a member that was offline is
@@ -521,6 +538,13 @@ export function createServer(opts: ServerOptions): ServerHandle {
           // perfectly healthy. Pre-existing, but the Servers tab now actively tells people to press that
           // button when a member is out of date, so it went from rare to routine.
           idleTimeout: 120,
+          // Attachments (§6.5) ride as base64 inside a JSON body, which inflates the payload by ~4/3.
+          // Bun's implicit 128 MB default therefore cut uploads off at ~96 MB of actual file, and it
+          // rejects oversized bodies itself — the route never runs, so the client got a bodyless 413
+          // and showed a bare "Upload failed". Size the ceiling from the shared limit (plus the
+          // inflation and the JSON envelope) so the boundary is deliberate and the client's
+          // pre-flight check is the thing users actually hit.
+          maxRequestBodySize: Math.ceil(MAX_ATTACHMENT_BYTES * (4 / 3)) + 1024 * 1024,
           async fetch(req, srv) {
             const url = new URL(req.url);
             const isApi = url.pathname.startsWith("/api/");
@@ -615,7 +639,6 @@ export function createServer(opts: ServerOptions): ServerHandle {
     if (body.todoistToken) {
       void supervisor.connectTodoist(body.todoistToken).catch((e: unknown) => console.warn(`[fleet] pushed Todoist token rejected: ${e instanceof Error ? e.message : e}`));
     }
-    supervisor.authDegrade.recover();
     supervisor.broadcastAuthState();
     if (body.accounts) supervisor.broadcastAccounts();
     void supervisor.restartIdleSessionsForNewToken(before);
@@ -667,6 +690,46 @@ export function createServer(opts: ServerOptions): ServerHandle {
     return Response.json(result, { status: result.ok ? 200 : 500 });
   });
   route("GET", "/api/update/v1/status", () => Response.json(updateStatus(updateDeps)));
+
+  // ── Frozen CC update API v1 (cc-cli-transport design §4.8; additive-only, breaking ⇒ /v2) ─────
+  // GET status/check (observe), POST apply (download+smoke+flip, client polls status), POST rollback.
+  // The CC CLI's per-session MCP endpoints (cc plans 4–5): /api/cc/mcp/<id> = the anvild approve
+  // tool; /api/cc/mcp/<id>/<server> = the session's role tool server; /api/cc/hook/<id>/stop =
+  // the goal Stop hook callback. All bearer-gated inside the supervisor (per-session secret from
+  // the session's own .mcp.json/overlay) — deliberately NOT identity-gated: the caller is a local
+  // CLI process with no tailscale headers.
+  routeRe("POST", /^\/api\/cc\/mcp\/([^/]+)(?:\/([^/]+))?$/, (req, _url, m) =>
+    supervisor.ccMcpRequest(decodeURIComponent(m![1]!), req, m![2] ? decodeURIComponent(m![2]!) : undefined),
+  );
+  routeRe("POST", /^\/api\/cc\/hook\/([^/]+)\/stop$/, (req, _url, m) => supervisor.ccStopHook(decodeURIComponent(m![1]!), req));
+
+  route("GET", "/api/cc/v1/status", () => Response.json({ ccApiVersion: CC_API_VERSION, ...ccUpdater.status() }));
+  route("GET", "/api/cc/v1/check", async () => Response.json({ ccApiVersion: CC_API_VERSION, ...(await ccUpdater.check()) }));
+  route("POST", "/api/cc/v1/apply", async (req, _url, _m, ctx) => {
+    // [SEC2-2]/[SEC2-3] parity with /api/update/v1/apply: JSON content-type kills no-cors
+    // drive-bys; a proven different tailnet user may not push a binary flip onto this member.
+    const ct = (req.headers.get("content-type") || "").toLowerCase();
+    if (!ct.includes("application/json")) return new Response("application/json required", { status: 415 });
+    const who = await ctx.callerIdentity();
+    if (who.trust === "otherUser" && !ctx.localNoIdentityCaller) return Response.json({ error: who.reject ?? "different tailnet user" }, { status: 403 });
+    const body = (await jsonBody<{ target?: string }>(req)) ?? {};
+    // Kick and return immediately — the flow's outcome lands in the state file; clients poll
+    // /status (fleet precedent, design delta 4). apply() itself never rejects (error phase).
+    void ccUpdater.apply(body.target);
+    return Response.json({ ccApiVersion: CC_API_VERSION, ...ccUpdater.status() });
+  });
+  route("POST", "/api/cc/v1/rollback", async (req, _url, _m, ctx) => {
+    const ct = (req.headers.get("content-type") || "").toLowerCase();
+    if (!ct.includes("application/json")) return new Response("application/json required", { status: 415 });
+    const who = await ctx.callerIdentity();
+    if (who.trust === "otherUser" && !ctx.localNoIdentityCaller) return Response.json({ error: who.reject ?? "different tailnet user" }, { status: 403 });
+    try {
+      ccUpdater.rollback();
+    } catch (e) {
+      return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 409 });
+    }
+    return Response.json({ ccApiVersion: CC_API_VERSION, ...ccUpdater.status() });
+  });
 
   // Fleet discovery (anvil-multi-server.md §4.1): enumerate Tailscale peers + probe each
   // /api/health, return the Anvil daemons found (deduped by serverId) as add-suggestions.
@@ -1152,10 +1215,25 @@ export function createServer(opts: ServerOptions): ServerHandle {
 
   // attachments (arch §6.5): POST uploads a pasted/dropped file, GET serves it back. Method "*":
   // the handler narrows POST/GET itself so any other method keeps answering 405 (not 404).
-  routeRe("*", /^\/api\/sessions\/([^/]+)\/attachments(?:\/([^/]+))?$/, async (req, _url, m) => {
+  routeRe("*", /^\/api\/sessions\/([^/]+)\/attachments(?:\/([^/]+))?$/, async (req, url, m) => {
     const sessionId = m![1]!;
     const attId = m![2];
     if (req.method === "POST" && !attId) {
+      // Streaming upload (§6.5): a non-JSON body IS the file. The bytes go straight to disk, so a
+      // large attachment never has to exist in memory on either side — the base64-in-JSON path below
+      // needed ~2-3x the file on the client and inflated the wire by 4/3, which is what made big
+      // uploads fail. Name/type ride in the query string. The JSON path stays for older clients
+      // (native shells bundle their own copy of the web UI and update on their own cadence).
+      if (!(req.headers.get("content-type") ?? "").includes("application/json")) {
+        try {
+          const name = url.searchParams.get("name") || "attachment";
+          const mediaType = url.searchParams.get("mediaType") || "";
+          const attachment = await supervisor.addAttachmentStream(sessionId, name, mediaType, req.body);
+          return Response.json({ attachment } satisfies rest.UploadAttachmentResponse);
+        } catch (e) {
+          return new Response(e instanceof Error ? e.message : "upload failed", { status: 400 });
+        }
+      }
       try {
         const body = (await req.json()) as { name?: string; mediaType?: string; dataBase64?: string };
         // mediaType may be empty (Android's content picker often omits it); the store infers

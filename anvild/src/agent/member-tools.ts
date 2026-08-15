@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createSdkMcpServer, tool, type McpSdkServerConfigWithInstance, type SdkMcpToolDefinition } from "@anthropic-ai/claude-agent-sdk";
+import { defineTool, type AnvilTool, type AnvilToolServer } from "../cc/tool-host";
 
 /**
  * In-process MCP tool given to a team **member** session so it can talk back to its lead
@@ -19,14 +19,14 @@ const fail = (text: string) => ({ content: [{ type: "text" as const, text }], is
 export const MEMBER_MCP_SERVER_NAME = "anvil_member";
 export const MEMBER_TOOL_IDS = ["message_lead"].map((t) => `mcp__${MEMBER_MCP_SERVER_NAME}__${t}`);
 
-export function buildMemberToolsServer(deps: MemberToolDeps): McpSdkServerConfigWithInstance {
-  return createSdkMcpServer({ name: MEMBER_MCP_SERVER_NAME, version: "1.0.0", tools: memberTools(deps) });
+export function buildMemberToolsServer(deps: MemberToolDeps): AnvilToolServer {
+  return { name: MEMBER_MCP_SERVER_NAME, tools: memberTools(deps) };
 }
 
 /** The member tool definitions (exported so tests can invoke handlers without a live SDK server). */
-export function memberTools(deps: MemberToolDeps): SdkMcpToolDefinition<any>[] {
+export function memberTools(deps: MemberToolDeps): AnvilTool[] {
   return [
-    tool(
+    defineTool(
       "message_lead",
       "Message your team LEAD — report progress, ask a clarifying question, flag a blocker, propose a " +
         "change, or hand back a result. Your lead receives it on its next turn and can reply (a full " +

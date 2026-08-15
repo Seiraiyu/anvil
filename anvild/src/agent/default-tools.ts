@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { createSdkMcpServer, tool, type McpSdkServerConfigWithInstance } from "@anthropic-ai/claude-agent-sdk";
-import type { AutonomyPolicy, Environment, Model, Session as SessionData, SessionSource } from "@protocol";
+import { defineTool, type AnvilToolServer } from "../cc/tool-host";
+import type { Environment, Model, PermissionMode, Session as SessionData, SessionSource } from "@protocol";
 
 /**
  * In-process MCP tools given ONLY to the persistent "concierge" default chat (§0.6). They let
@@ -25,7 +25,7 @@ export interface DefaultToolDeps {
     base?: string;
     title: string;
     model?: Model;
-    autonomy?: AutonomyPolicy;
+    permissionMode?: PermissionMode;
     brief: string;
     // ── Teams: stamp the new session as a member of a lead (see docs/plans/anvil-team-support.md) ──
     parentId?: string;
@@ -44,7 +44,7 @@ function summarize(s: SessionData) {
     title: s.title,
     status: s.status,
     model: s.model,
-    autonomy: s.autonomy,
+    permissionMode: s.permissionMode,
     environmentId: s.environmentId,
     source: s.source,
     archived: !!s.archived,
@@ -68,12 +68,11 @@ export const DEFAULT_TOOL_IDS = ["list_sessions", "get_session", "list_environme
   (t) => `mcp__${DEFAULT_MCP_SERVER_NAME}__${t}`,
 );
 
-export function buildDefaultToolsServer(deps: DefaultToolDeps): McpSdkServerConfigWithInstance {
-  return createSdkMcpServer({
+export function buildDefaultToolsServer(deps: DefaultToolDeps): AnvilToolServer {
+  return {
     name: DEFAULT_MCP_SERVER_NAME,
-    version: "1.0.0",
     tools: [
-      tool(
+      defineTool(
         "list_sessions",
         "List every Anvil session across ALL environments with title, environment, status, model, " +
           "last activity, and git state (branch, dirty count, ahead/behind, PR). Use this to answer " +
@@ -85,7 +84,7 @@ export function buildDefaultToolsServer(deps: DefaultToolDeps): McpSdkServerConf
           return ok(JSON.stringify(all, null, 2));
         },
       ),
-      tool(
+      defineTool(
         "get_session",
         "Get the detail for one session by id (same fields as list_sessions, for a single session).",
         { id: z.string().describe("The session id, e.g. sess_…") },
@@ -95,14 +94,14 @@ export function buildDefaultToolsServer(deps: DefaultToolDeps): McpSdkServerConf
           return ok(JSON.stringify(summarize(s), null, 2));
         },
       ),
-      tool(
+      defineTool(
         "list_environments",
         "List the registered environments (project repos) the user can spin sessions up in: id, name, " +
           "repoRoot, whether it's a git repo (isRepo), and the default base branch.",
         {},
         async () => ok(JSON.stringify(deps.listEnvironments(), null, 2)),
       ),
-      tool(
+      defineTool(
         "create_session",
         "Create a NEW working session and hand off a task to it — it starts working immediately on the " +
           "brief you provide. Prefer a fresh-worktree session in a chosen environment for code work " +
@@ -120,10 +119,10 @@ export function buildDefaultToolsServer(deps: DefaultToolDeps): McpSdkServerConf
           base: z.string().optional().describe("Base branch/commit for the worktree (default: the env's default base)."),
           title: z.string().describe("Short human title for the session (also used as the branch slug)."),
           model: z.enum(["opus", "sonnet"]).optional().describe("Model for the new session (default opus)."),
-          autonomy: z
-            .enum(["mostly-autonomous", "allowlist", "prompt-all", "bypass"])
+          permissionMode: z
+            .enum(["default", "acceptEdits", "plan", "bypassPermissions"])
             .optional()
-            .describe("Permission posture for the new session (default mostly-autonomous)."),
+            .describe("Permission mode for the new session (default bypassPermissions)."),
           brief: z
             .string()
             .describe("The handoff brief: the full, self-contained first instruction the new session should act on."),
@@ -137,7 +136,7 @@ export function buildDefaultToolsServer(deps: DefaultToolDeps): McpSdkServerConf
               base: a.base,
               title: a.title,
               model: a.model as Model | undefined,
-              autonomy: a.autonomy as AutonomyPolicy | undefined,
+              permissionMode: a.permissionMode as PermissionMode | undefined,
               brief: a.brief,
             });
             return ok(`Created and started session "${title}" (${id}) at ${cwd}. It is now working on the brief.`);
@@ -147,5 +146,5 @@ export function buildDefaultToolsServer(deps: DefaultToolDeps): McpSdkServerConf
         },
       ),
     ],
-  });
+  };
 }

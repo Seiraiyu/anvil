@@ -1,5 +1,4 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
-import { claudeCliOptions } from "./cli";
+import { runCcMicroQuery, type CcSeam } from "../cc/oneshot";
 
 /**
  * Curated Material Symbols (Rounded) names. Constraining Sonnet's choice to this set
@@ -20,44 +19,23 @@ const SET = new Set(ICONS);
 
 /**
  * Ask Sonnet to pick the best-fitting icon for a session, constrained to ICONS. One-shot,
- * no tools, uses the §3 OAuth env. Returns undefined on failure/timeout so the caller falls
- * back to a generic icon.
+ * no tools (CLI-direct micro-query), uses the §3 OAuth env. Returns undefined on failure/timeout
+ * so the caller falls back to a generic icon.
  */
-export async function pickIcon(title: string, env: Record<string, string>): Promise<string | undefined> {
+export async function pickIcon(
+  title: string,
+  env: Record<string, string>,
+  cc?: CcSeam,
+): Promise<string | undefined> {
   const prompt =
     `Choose the single best-fitting icon for a software-development session titled: "${title}".\n` +
     `Pick exactly one name from this list:\n${ICONS.join(", ")}\n` +
     `Reply with ONLY the icon name (snake_case), nothing else.`;
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), 20_000);
   try {
-    const q = query({
-      prompt,
-      options: {
-        model: "sonnet",
-        settingSources: [],
-        allowedTools: [],
-        permissionMode: "bypassPermissions",
-        maxTurns: 1,
-        ...claudeCliOptions(),
-        abortController: ac,
-        env,
-      },
-    });
-    let text = "";
-    for await (const m of q) {
-      if (m.type === "assistant") {
-        for (const block of (m as { message?: { content?: Array<{ type: string; text?: string }> } }).message?.content ?? []) {
-          if (block.type === "text" && block.text) text += block.text;
-        }
-      }
-      if (m.type === "result") break;
-    }
+    const text = await runCcMicroQuery(prompt, { model: "sonnet", env, timeoutMs: 20_000, ...cc });
     const name = text.trim().toLowerCase().replace(/[^a-z_]/g, "");
     return SET.has(name) ? name : undefined;
   } catch {
     return undefined;
-  } finally {
-    clearTimeout(timer);
   }
 }

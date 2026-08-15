@@ -213,7 +213,9 @@ export function resyncTerminal(): void {
 function termRoster(): TerminalInfo[] {
   const roster: TerminalInfo[] = (activeId() ? sessions.get(activeId()!)?.terminals : undefined) ?? [];
   const merged = roster.some((t) => t.id === activeTermId) ? [...roster] : [...roster, { id: activeTermId, title: "shell" }];
-  return merged.sort((a, b) => Number(a.id) - Number(b.id));
+  // numeric ids in order; named ids (the "cc" attach terminal, cc plan 6) sort last
+  const num = (id: string) => (Number.isFinite(Number(id)) ? Number(id) : Number.MAX_SAFE_INTEGER);
+  return merged.sort((a, b) => num(a.id) - num(b.id) || a.id.localeCompare(b.id));
 }
 
 /** Redraw the chip strip (no-op unless the Terminal tab is mounted). main.ts calls this on
@@ -229,7 +231,16 @@ export function renderTermStrip(): void {
         `<button type="button" class="term-kill" title="Kill this terminal">${icon("close")}</button></span>`,
     )
     .join("");
-  strip.innerHTML = chips + `<button type="button" id="term-new" class="term-chip term-new" title="New terminal">${icon("add")}</button>`;
+  // Attach (cc plan 6 §4.9): put the session's REAL CC conversation in a terminal chip. Shown
+  // only when the gate would pass (idle, resumable, not already attached); the daemon re-checks.
+  const sess = activeId() ? sessions.get(activeId()!) : undefined;
+  const canAttach = !!sess?.claudeSessionId && !sess.attached && sess.status === "idle" && !termRoster().some((t) => t.id === "cc");
+  strip.innerHTML =
+    chips +
+    `<button type="button" id="term-new" class="term-chip term-new" title="New terminal">${icon("add")}</button>` +
+    (canAttach
+      ? `<button type="button" id="term-attach" class="term-chip term-new" title="Attach Claude Code here (claude --resume) — chat pauses until you detach (close the chip)">${icon("robot_2")}</button>`
+      : "");
   strip.querySelectorAll<HTMLElement>(".term-sel").forEach((b) =>
     b.addEventListener("click", () => {
       const tid = (b.parentElement as HTMLElement).dataset.tid!;
@@ -244,6 +255,15 @@ export function renderTermStrip(): void {
       if (activeId()) sendTo(activeId()!, { type: "terminal.close", sessionId: activeId()!, termId: tid });
     }),
   );
+  const attach = document.getElementById("term-attach");
+  if (attach)
+    attach.onclick = () => {
+      const id = activeId();
+      if (!id) return;
+      sendTo(id, { type: "cc.attach", sessionId: id, cols: xterm?.cols ?? 80, rows: xterm?.rows ?? 24 });
+      activeTermId = "cc";
+      mountTerminal(); // the queued terminal.open replays the fresh attach PTY
+    };
   const add = document.getElementById("term-new");
   if (add)
     add.onclick = () => {

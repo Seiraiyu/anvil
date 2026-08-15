@@ -2,7 +2,6 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { looksLikeMeteredKey, mask } from "./env-file";
-import { checkAuth, type GuardStatus } from "./guard";
 
 /**
  * The daemon's roster of Claude subscription accounts (2026-07-25 multi-account design §3).
@@ -285,6 +284,75 @@ export class AccountStore {
     writeFileSync(tmp, `${JSON.stringify(this.data, null, 2)}\n`, { mode: 0o600 });
     renameSync(tmp, this.file);
   }
+}
+
+// ── Auth status (moved from the deleted auth/guard.ts — cc plan 4 "defer-to-CC auth").
+// The boot-refusal machinery is gone: CC owns auth outcomes. What remains is the pure SHAPE
+// check the roster/health UX uses to label a machine's credential state.
+export interface GuardStatus {
+  /** A plausible subscription OAuth token is present (and no metered key outranks it). */
+  subscriptionAuthOk: boolean;
+  /** The §3 invariant is VIOLATED — a metered key would bill per-token. The daemon must not start. */
+  fatal: boolean;
+  reason?: string;
+}
+
+function isSet(v: string | undefined): boolean {
+  return typeof v === "string" && v.trim().length > 0;
+}
+
+/**
+ * Pure check — no side effects. Used by /api/health and by the startup assertion.
+ *
+ * The two axes are independent, so all four combinations are defined (headless-join §4.1):
+ *
+ * | metered key | OAuth token       | fatal | subscriptionAuthOk |
+ * |-------------|-------------------|-------|--------------------|
+ * | set         | any               | true  | false (moot)       |
+ * | unset       | plausible         | false | true               |
+ * | unset       | absent/empty      | false | false              |
+ * | unset       | `sk-ant-api…`     | false | false              |
+ *
+ * "Plausible" is a SHAPE check, not a validity check: a well-formed but revoked token still reports
+ * `true` here until a turn actually fails. Auto-degrade (auth/degrade.ts) is what makes the flag
+ * eventually truthful about a token that is merely wrong.
+ */
+export function checkAuth(env: Record<string, string | undefined> = process.env): GuardStatus {
+  // Fatal first: a metered key outranks the OAuth token, so its presence decides the outcome
+  // regardless of whether a subscription token is also set.
+  if (isSet(env.ANTHROPIC_API_KEY)) {
+    return {
+      subscriptionAuthOk: false,
+      fatal: true,
+      reason:
+        "ANTHROPIC_API_KEY is set — it outranks the OAuth token and would meter billing per-token. Unset it (arch §3).",
+    };
+  }
+  if (isSet(env.ANTHROPIC_AUTH_TOKEN)) {
+    return {
+      subscriptionAuthOk: false,
+      fatal: true,
+      reason: "ANTHROPIC_AUTH_TOKEN is set — it outranks the OAuth token. Unset it (arch §3).",
+    };
+  }
+  const token = env.CLAUDE_CODE_OAUTH_TOKEN ?? "";
+  if (!isSet(token)) {
+    return {
+      subscriptionAuthOk: false,
+      fatal: false,
+      reason:
+        "CLAUDE_CODE_OAUTH_TOKEN is not set — this machine can't run turns until it's paired with a fleet or a token is set in Settings → Auth.",
+    };
+  }
+  if (looksLikeMeteredKey(token)) {
+    return {
+      subscriptionAuthOk: false,
+      fatal: false,
+      reason:
+        "CLAUDE_CODE_OAUTH_TOKEN looks like a metered ANTHROPIC_API_KEY (`sk-ant-api…`), not a subscription token — run `claude setup-token` and use that value (arch §3).",
+    };
+  }
+  return { subscriptionAuthOk: true, fatal: false };
 }
 
 /**

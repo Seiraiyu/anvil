@@ -159,8 +159,19 @@ export function buildCommandInfo(slashCommands: readonly string[], cwd: string):
       const description = skillDescription(dirs[ns]!, name.slice(colon + 1));
       return description ? { name, description, source: ns } : { name, source: ns };
     }
-    const description = BUILTIN_DESCRIPTIONS[name];
-    return description ? { name, description, source: "builtin" as const } : { name, source: "builtin" as const };
+    const builtin = BUILTIN_DESCRIPTIONS[name];
+    if (builtin) return { name, description: builtin, source: "builtin" as const };
+    // CC-native sessions (cc plan 5, design §4.3) list the user's real skills BARE — no
+    // `user:`/`project:` namespace. Enrich from the real ~/.claude / project skill dirs so the
+    // composer's `/` menu shows their one-line descriptions and true source.
+    if (!ns) {
+      for (const src of ["user", "project"] as const) {
+        if (!dirs[src]) continue;
+        const description = skillDescription(dirs[src]!, name);
+        if (description) return { name, description, source: src };
+      }
+    }
+    return { name, source: "builtin" as const };
   });
   const have = new Set(out.map((c) => c.name));
   // `/goal` joins the context controls in the guarantee pass: like them it is intercepted by the

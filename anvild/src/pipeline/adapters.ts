@@ -4,11 +4,11 @@
  * `checks`/`openPr` with the environment's configured validation command and the existing git/PR
  * machinery where those are richer than the repo-agnostic defaults here.
  */
-import { runAgentQuery } from "../agent/query";
+import { runCcQuery } from "../cc/oneshot";
 import type { AgentFn, CaptureDiffFn } from "./phases";
 
-/** The real agent adapter: drive either model through the one Agent SDK path. */
-export const defaultAgent: AgentFn = (prompt, opts) => runAgentQuery(prompt, opts);
+/** The real agent adapter: drive either model through the one CLI-direct one-shot path. */
+export const defaultAgent: AgentFn = (prompt, opts) => runCcQuery(prompt, opts);
 
 /** Capture a compact, repo-agnostic reference to the implemented change: HEAD sha + diffstat. */
 export const captureGitDiff: CaptureDiffFn = async (repoRoot, signal) => {

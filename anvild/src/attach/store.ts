@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AttachmentRef } from "@protocol";
 import { newId } from "../util/ids";
@@ -103,6 +103,44 @@ export class AttachmentStore {
     return { id, kind: resolved.startsWith("image/") ? "image" : "file", name, path: binPath };
   }
 
+  /**
+   * Streaming upload (§6.5): write the request body straight to disk instead of carrying the bytes
+   * as base64 inside a JSON envelope. Base64 inflates the wire by 4/3 AND forces both sides to hold
+   * the whole file in memory — the client read it with `readAsDataURL` and re-encoded it into a JSON
+   * string (2-3x the file, brutal on a phone), which is what made a large upload fail. `Bun.write`
+   * consumes the body as a stream, so peak memory no longer scales with the file.
+   */
+  async addStream(sessionId: string, name: string, mediaType: string, body: ReadableStream<Uint8Array> | null): Promise<AttachmentRef> {
+    const { id, binPath, resolved } = this.prepare(sessionId, name, mediaType);
+    // Pump the stream through a FileSink chunk by chunk. NOTE: `Bun.write(path, new Response(body))`
+    // reads like the obvious way to do this and DEADLOCKS on Bun 1.3.14 — the request never
+    // completes, at any size. Keep the explicit reader loop.
+    const sink = Bun.file(binPath).writer();
+    try {
+      if (body) {
+        const reader = body.getReader();
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          sink.write(value);
+        }
+      }
+    } finally {
+      await sink.end();
+    }
+    writeFileSync(join(this.dir(sessionId), `${id}.json`), JSON.stringify({ mediaType: resolved, name, ext: binPath.slice(binPath.lastIndexOf(".") + 1) }));
+    return { id, kind: resolved.startsWith("image/") ? "image" : "file", name, path: binPath };
+  }
+
+  /** The id/extension/media-type decisions shared by the JSON and streaming upload paths. */
+  private prepare(sessionId: string, name: string, mediaType: string): { id: string; binPath: string; resolved: string } {
+    const id = newId("att");
+    const resolved = inferMediaType(mediaType, name);
+    const nameExt = name.includes(".") ? sanitizeExt(name.slice(name.lastIndexOf(".") + 1)) : "";
+    const ext = nameExt || EXT[resolved] || "bin";
+    return { id, binPath: join(this.dir(sessionId), `${id}.${ext}`), resolved };
+  }
+
   private resolve(sessionId: string, id: string): { binPath: string; mediaType: string; name: string } | undefined {
     assertSafeSegment(id, "attachment id"); // [SEC-M2] id arrives from the REST GET path
     const metaPath = join(this.dir(sessionId), `${id}.json`);
@@ -124,11 +162,34 @@ export class AttachmentStore {
     return r && existsSync(r.binPath) ? { mediaType: r.mediaType, path: r.binPath } : undefined;
   }
 
-  /** For feeding the agent — name + media type + base64 bytes. The driver turns this into the
-   *  right content block (image / PDF document / inline text). */
-  loadForAgent(sessionId: string, id: string): { mediaType: string; name: string; data: string } | undefined {
+  /**
+   * For feeding the agent — name + media type + base64 of at most `maxBytesFor(mediaType)` bytes.
+   *
+   * The budget matters: this used to `readFileSync` the WHOLE file and base64 it on every prompt
+   * carrying the attachment, even for a binary whose only fate is a one-line "not inlined" note. A
+   * large upload therefore spiked multiples of its size in memory for nothing. Now we read only what
+   * the content block can actually use, and report the real `size` so the block can say how much was
+   * left out.
+   */
+  loadForAgent(
+    sessionId: string,
+    id: string,
+    maxBytesFor: (mediaType: string) => number,
+  ): { mediaType: string; name: string; data: string; size: number; truncated: boolean } | undefined {
     const r = this.resolve(sessionId, id);
     if (!r || !existsSync(r.binPath)) return undefined;
-    return { mediaType: r.mediaType, name: r.name, data: readFileSync(r.binPath).toString("base64") };
+    const size = statSync(r.binPath).size;
+    const budget = Math.max(0, maxBytesFor(r.mediaType));
+    const take = Math.min(size, budget);
+    const buf = Buffer.alloc(take);
+    if (take > 0) {
+      const fd = openSync(r.binPath, "r");
+      try {
+        readSync(fd, buf, 0, take, 0);
+      } finally {
+        closeSync(fd);
+      }
+    }
+    return { mediaType: r.mediaType, name: r.name, data: buf.toString("base64"), size, truncated: size > take };
   }
 }

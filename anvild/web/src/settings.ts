@@ -22,10 +22,10 @@
 // initSettings(deps) — mirroring fleet/sidebar/conversation/autopilot — during main's module init.
 // Cross-module REASSIGNED scalars main still reads (`claudeAccounts` for the header chip + account
 // pickers; `todoistConnected`/`todoistProjectsLoaded` for the environment modal and the member
-// token-propagation check) live on `ui` in state.ts; in-place containers (`todoistProjects`,
-// `readmeLoaded`) stay `const` here.
+// token-propagation check) live on `ui` in state.ts; the in-place container `todoistProjects` stays
+// `const` here.
 import { apiFetch } from "./api";
-import { $, busy, byEnvName, envIcon, esc, icon } from "./dom";
+import { $, busy, byEnvName, envIcon, esc, icon, repaintPreservingInput } from "./dom";
 // dialogs.ts is a leaf, so the modal/toast helpers and the environment modals are direct imports —
 // they used to arrive via initSettings(deps).
 import { closeModal, confirmDialog, showAddEnvironment, showEditEnvironment, showModal, toast } from "./dialogs";
@@ -63,6 +63,8 @@ import {
   showAddMac,
   startFleetUpdate,
   wireDaemonUpdate,
+  ccCardRowHtml,
+  wireCcUpdate,
   type Server,
 } from "./fleet";
 import type { AccountInfo, AuthAccountsEvent, AuthStatusEvent, Environment, PipelineAdversaryStat, ServerEvent, Session, TodoistProjectInfo } from "../../protocol";
@@ -154,7 +156,7 @@ export function openSettings(): void {
       </section>
       <section class="settings-panel" data-tab="prompts">
         <div class="section-head"><h3>Prompts</h3><button id="set-add-prompt" class="primary">${icon("add")} Add prompt</button></div>
-        <p class="small muted">Reusable prompt snippets. Each shows up as a button in the sidebar — click it to drop the prompt into the chat box.</p>
+        <p class="small muted">Reusable prompt snippets. Each shows up in the Prompts menu in the header — click it to drop the prompt into the chat box.</p>
         <div id="prompt-cards"></div>
       </section>
       <section class="settings-panel" data-tab="appearance">
@@ -171,7 +173,12 @@ export function openSettings(): void {
   $("#settings-close").addEventListener("click", () => dismissOverlay("settings"));
   $("#set-add-env").addEventListener("click", () => showAddEnvironment());
   $("#set-add-prompt").addEventListener("click", () => showEditPrompt());
-  $("#todoist-refresh").addEventListener("click", () => loadTodoistProjects(true));
+  // [WEB2-19] busy() owns the disable → "Refreshing…" → restore lifecycle, like every other async
+  // button here. Without it, rapid clicks fired overlapping projects.list requests and the panel
+  // flickered as each late reply repainted it.
+  $("#todoist-refresh").addEventListener("click", (e) =>
+    void busy(e.currentTarget as HTMLButtonElement, "Refreshing…", () => loadTodoistProjects(true)),
+  );
   root.querySelectorAll<HTMLElement>(".theme-opt").forEach((b) =>
     b.addEventListener("click", () => setThemePref(b.dataset.themePref as ThemePref)),
   );
@@ -336,7 +343,10 @@ export function todoistProjectOptions(selectedId?: string, exceptEnvId?: string)
 export function onTodoistStatus(connected: boolean, account?: string): void {
   ui.todoistConnected = connected;
   todoistAccount = account;
-  if (document.getElementById("todoist-panel")) renderTodoistPanel();
+  // Broadcast to every device, so it can land while someone is mid-paste in this panel's token
+  // field — repaint without eating their unsaved input.
+  const host = document.getElementById("todoist-panel");
+  if (host) repaintPreservingInput(host, renderTodoistPanel);
 }
 
 /** Fetch the account's projects (live) and cache them; `force` re-fetches even if already loaded. */
@@ -538,7 +548,10 @@ export function onAuthStatus(e: AuthStatusEvent): void {
   const state: ProviderAuth = { connected: e.connected, persisted: e.persisted, ...(e.masked ? { masked: e.masked } : {}) };
   if (e.provider === "openrouter") openRouterAuth = state;
   else claudeAuth = state;
-  if (document.getElementById("models-panel")) renderModelsPanel();
+  // Same hazard as onTodoistStatus: this arrives on every device, and the Models panel is exactly
+  // where someone pastes an OpenRouter key or Claude token.
+  const modelsHost = document.getElementById("models-panel");
+  if (modelsHost) repaintPreservingInput(modelsHost, renderModelsPanel);
   // A Claude-token change is exactly the transition the setup takeover exists for — a pair, a paste, or
   // an auto-degrade. Re-read health so the screen appears/clears live on every open device, rather than
   // only on the next reload (anvil-headless-join.md §5.1).
@@ -552,7 +565,8 @@ export function onAuthStatus(e: AuthStatusEvent): void {
 // chip + switch menu, and the new-session/environment account pickers).
 export function onAuthAccounts(e: AuthAccountsEvent): void {
   ui.claudeAccounts = e;
-  if (document.getElementById("models-panel")) renderModelsPanel();
+  const host = document.getElementById("models-panel");
+  if (host) repaintPreservingInput(host, renderModelsPanel); // keep unsaved token input (see onAuthStatus)
   // The header chip appears/disappears at the 1↔2-account boundary and shows a label the roster owns,
   // so a roster change has to repaint it even when no session.updated follows.
   updateHeaderAccount(activeId() ? sessions.get(activeId()!) : undefined);
@@ -979,6 +993,7 @@ function serverCardHtml(srv: Server): string {
     ${accountSyncLine(srv, isHub)}
     <div class="git-row" style="margin-top:10px"><button class="mini" id="daemon-update-${id}">${icon("refresh")} Update Anvil</button></div>
     <pre class="git-output" id="daemon-update-output-${id}" hidden></pre>
+    ${ccCardRowHtml(srv)}
   </div>`;
 }
 export function renderServerCards(): void {
@@ -1009,6 +1024,7 @@ export function renderServerCards(): void {
     list.map(serverCardHtml).join("");
   for (const srv of list) {
     wireDaemonUpdate(srv); // each card's "Update Anvil" targets that server's own daemon
+    wireCcUpdate(srv); // the managed Claude Code row (no-op when the card has no cc row)
     if (srv.url !== HUB_URL) {
       document.getElementById(`srv-remove-${cssId(srv.url)}`)?.addEventListener("click", () => void confirmRemoveServer(srv));
     }
@@ -1096,12 +1112,15 @@ export function renderEnvCards(): void {
   host.querySelectorAll<HTMLElement>(".env-edit").forEach((b) => b.addEventListener("click", () => showEditEnvironment(b.dataset.env!)));
   host.querySelectorAll<HTMLElement>(".env-readme").forEach((b) => b.addEventListener("click", () => toggleReadme(b.dataset.env!)));
 }
-const readmeLoaded = new Set<string>();
 async function toggleReadme(id: string): Promise<void> {
   const body = document.getElementById(`readme-${id}`);
   if (!body) return;
   body.hidden = !body.hidden;
-  if (body.hidden || readmeLoaded.has(id)) return;
+  // The body element IS the load cache. A module-level "already fetched" set desynced from the DOM:
+  // any re-render of the environment list (an `environments` broadcast — e.g. right after editing an
+  // environment) recreates this div EMPTY, but the set still claimed it was loaded, so the next click
+  // expanded a blank panel with no content, no spinner, and no error.
+  if (body.hidden || body.childElementCount > 0) return;
   body.innerHTML = `<p class="small muted">Loading README…</p>`;
   try {
     const r = (await (await serverFetch(serverOfEnv(id).url, `/api/environments/${encodeURIComponent(id)}/readme`)).json()) as { markdown?: { html: string }; text?: string; missing?: boolean };
@@ -1110,7 +1129,6 @@ async function toggleReadme(id: string): Promise<void> {
       body.innerHTML = `<div class="md reader-md">${r.markdown.html}</div>`;
       void runMermaid(body.querySelector(".reader-md") as HTMLElement);
     } else body.innerHTML = `<pre class="reader-text">${esc(r.text ?? "")}</pre>`;
-    readmeLoaded.add(id);
   } catch {
     body.innerHTML = `<p class="small muted">Couldn't load the README.</p>`;
   }

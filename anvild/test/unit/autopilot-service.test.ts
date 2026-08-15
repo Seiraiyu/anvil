@@ -70,8 +70,6 @@ function harness() {
       sessions.add(id);
       return { id, title: a.title, cwd: "/tmp" };
     },
-    authDegraded: () => false,
-    claimDegradeEpisodeAlert: () => false,
     pushSystemAlert: () => {},
     notifyAll: () => {},
     broadcastLoops: () => {},

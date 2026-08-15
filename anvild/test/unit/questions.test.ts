@@ -1,86 +1,57 @@
+/**
+ * QuestionBroker + normalizeQuestions (arch §6.6). The AskUserQuestion answer SHAPING (answers map
+ * keyed by question text, annotations, cancel semantics) lives in the CLI transport's approve tool
+ * and is pinned by test/unit/cc-permission-server.test.ts — the SDK-era makeCanUseTool died with
+ * the driver (cc plan 7).
+ */
 import { test, expect } from "bun:test";
-import type { Question } from "@protocol";
-import { QuestionBroker, makeCanUseTool } from "../../src/agent/questions";
-import type { Session } from "../../src/session/session";
+import { QuestionBroker, normalizeQuestions } from "../../src/agent/questions";
 
-/** Minimal Session stub: the handler only needs `id` and `requestQuestion`. */
-function fakeSession(): { session: Session; asked: { requestId: string; questions: Question[] }[] } {
-  const asked: { requestId: string; questions: Question[] }[] = [];
-  const session = {
-    id: "sess_1",
-    requestQuestion(requestId: string, questions: Question[]) {
-      asked.push({ requestId, questions });
+test("broker parks, resolves once, and reports the owning session", async () => {
+  const broker = new QuestionBroker();
+  const pending = broker.request("q_1", "sess_1");
+  expect(broker.sessionFor("q_1")).toBe("sess_1");
+  expect(broker.resolve("q_1", { cancelled: false, answers: [{ question: "Q?", labels: ["A"] }] })).toBe(true);
+  expect(await pending).toEqual({ cancelled: false, answers: [{ question: "Q?", labels: ["A"] }] });
+  // a second resolve is a no-op (already handed off)
+  expect(broker.resolve("q_1", { cancelled: true })).toBe(false);
+  expect(broker.sessionFor("q_1")).toBeUndefined();
+});
+
+test("resolveSession cancels every parked question for that session only", async () => {
+  const broker = new QuestionBroker();
+  const a = broker.request("q_a", "sess_1");
+  const b = broker.request("q_b", "sess_1");
+  const other = broker.request("q_c", "sess_2");
+  expect(broker.resolveSession("sess_1")).toBe(2);
+  expect(await a).toEqual({ cancelled: true });
+  expect(await b).toEqual({ cancelled: true });
+  expect(broker.sessionFor("q_c")).toBe("sess_2"); // untouched
+  broker.resolve("q_c", { cancelled: true });
+  await other;
+});
+
+test("normalizeQuestions coerces the opaque payload defensively", () => {
+  expect(normalizeQuestions(undefined)).toEqual([]);
+  expect(normalizeQuestions("nope")).toEqual([]);
+  expect(normalizeQuestions([{ notAQuestion: true }, null])).toEqual([]);
+  const qs = normalizeQuestions([
+    {
+      question: "Which library?",
+      header: "Library",
+      multiSelect: true,
+      options: [{ label: "date-fns", description: "small", preview: "code" }, { label: 42 }],
     },
-  } as unknown as Session;
-  return { session, asked };
-}
-
-const opts = { signal: new AbortController().signal, toolUseID: "tool_1" } as any;
-const input = {
-  questions: [
-    { question: "Which library?", header: "Library", options: [{ label: "date-fns", description: "small" }, { label: "luxon", description: "rich" }] },
-  ],
-};
-
-test("non-AskUserQuestion tools allow through unchanged (the hook already vetted them)", async () => {
-  const broker = new QuestionBroker();
-  const { session } = fakeSession();
-  const canUseTool = makeCanUseTool(session, broker);
-  expect(await canUseTool("Read", { file_path: "/tmp/x" }, opts)).toEqual({ behavior: "allow", updatedInput: { file_path: "/tmp/x" } });
-});
-
-test("answered question → allow with answers in updatedInput", async () => {
-  const broker = new QuestionBroker();
-  const { session, asked } = fakeSession();
-  const canUseTool = makeCanUseTool(session, broker);
-
-  const resultP = canUseTool("AskUserQuestion", input, opts);
-  // The handler parks a request; answer it via the broker (as dispatch/supervisor would).
-  expect(asked).toHaveLength(1);
-  const requestId = asked[0]!.requestId;
-  expect(broker.resolve(requestId, { cancelled: false, answers: [{ question: "Which library?", labels: ["luxon"] }] })).toBe(true);
-
-  const result = await resultP;
-  // updatedInput keeps the original input (questions round-trip) and adds the answers map.
-  expect(result).toEqual({
-    behavior: "allow",
-    updatedInput: { questions: input.questions, answers: { "Which library?": "luxon" } },
-  });
-});
-
-test("multiSelect answers become an array; free-text becomes annotations", async () => {
-  const broker = new QuestionBroker();
-  const { session, asked } = fakeSession();
-  const canUseTool = makeCanUseTool(session, broker);
-  const resultP = canUseTool("AskUserQuestion", input, opts);
-  broker.resolve(asked[0]!.requestId, {
-    cancelled: false,
-    answers: [{ question: "Which library?", labels: ["date-fns", "luxon"], notes: "or moment" }],
-  });
-  const result = (await resultP) as any;
-  expect(result.behavior).toBe("allow");
-  expect(result.updatedInput.answers).toEqual({ "Which library?": ["date-fns", "luxon"] });
-  expect(result.updatedInput.annotations).toEqual({ "Which library?": { notes: "or moment" } });
-});
-
-test("skipped/cancelled answer → allow with no answers (CLI emits 'did not answer', model proceeds)", async () => {
-  const broker = new QuestionBroker();
-  const { session, asked } = fakeSession();
-  const canUseTool = makeCanUseTool(session, broker);
-  const resultP = canUseTool("AskUserQuestion", input, opts);
-  broker.resolve(asked[0]!.requestId, { cancelled: true });
-  const result = (await resultP) as any;
-  expect(result.behavior).toBe("allow");
-  expect(result.updatedInput.answers).toBeUndefined();
-});
-
-test("resolveSession cancels every parked question for a session", async () => {
-  const broker = new QuestionBroker();
-  const { session, asked } = fakeSession();
-  const canUseTool = makeCanUseTool(session, broker);
-  const resultP = canUseTool("AskUserQuestion", input, opts);
-  expect(broker.resolveSession("sess_1")).toBe(1);
-  const result = (await resultP) as any;
-  expect(result.behavior).toBe("allow");
-  expect(asked).toHaveLength(1);
+  ]);
+  expect(qs).toEqual([
+    {
+      question: "Which library?",
+      header: "Library",
+      multiSelect: true,
+      options: [
+        { label: "date-fns", description: "small", preview: "code" },
+        { label: "42", description: "" },
+      ],
+    },
+  ]);
 });

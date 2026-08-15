@@ -52,7 +52,8 @@ export class OutboxQueue {
 
   private load(): OutboxItem[] {
     try {
-      return JSON.parse(this.storage.getItem(this.key) ?? "[]") as OutboxItem[];
+      const items = JSON.parse(this.storage.getItem(this.key) ?? "[]") as OutboxItem[];
+      return items.map(migrateLegacyAutonomy);
     } catch {
       return [];
     }
@@ -64,4 +65,28 @@ export class OutboxQueue {
       /* quota — the in-memory queue is still authoritative for this session */
     }
   }
+}
+
+// ── cc plan 4 (protocol delta 1) migration ───────────────────────────────────────────────────────
+// A command queued OFFLINE before the autonomy→permissionMode rename can be flushed AFTER the
+// upgrade (localStorage straddles deploys even under fresh-start). Rewrite the two legacy shapes
+// in place: session.create's `autonomy` key, and the session.set_autonomy command itself.
+const LEGACY_AUTONOMY_MAP: Record<string, string> = {
+  bypass: "bypassPermissions",
+  "mostly-autonomous": "bypassPermissions", // the closest behavioral match (rarely prompted)
+  allowlist: "default",
+  "prompt-all": "default",
+};
+
+function migrateLegacyAutonomy(item: OutboxItem): OutboxItem {
+  const cmd = item.cmd;
+  if (cmd.type === "session.create" && typeof cmd.autonomy === "string") {
+    const { autonomy, ...rest } = cmd;
+    return { ...item, cmd: { ...rest, type: cmd.type, permissionMode: LEGACY_AUTONOMY_MAP[autonomy] ?? "default" } };
+  }
+  if (cmd.type === "session.set_autonomy") {
+    const mode = typeof cmd.policy === "string" ? (LEGACY_AUTONOMY_MAP[cmd.policy] ?? "default") : "default";
+    return { ...item, cmd: { type: "session.set_permission_mode", sessionId: cmd.sessionId, mode } };
+  }
+  return item;
 }

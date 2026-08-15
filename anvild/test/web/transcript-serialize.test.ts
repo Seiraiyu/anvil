@@ -65,6 +65,8 @@ function countingClones<T>(fn: () => T): { result: T; clones: number } {
   }
 }
 
+// Building the 1000-bubble DOM takes >5s on slow machines (e.g. WSL2); the perf guard here
+// is the clone-count assertion, not wall time, so a generous timeout doesn't weaken it.
 test("[WEB2-6] a 1000-bubble transcript saves a bounded slice (cap = 200)", () => {
   fill(1000);
   const counted = countingClones(() => convo.serializeTranscript(200));
@@ -81,7 +83,7 @@ test("[WEB2-6] a 1000-bubble transcript saves a bounded slice (cap = 200)", () =
   expect(bubbles.length).toBe(200);
   expect(bubbles[0]!.textContent).toContain("msg 800");
   expect(bubbles[199]!.textContent).toContain("msg 999");
-});
+}, 30_000);
 
 test("[WEB2-6] the common case (under the cap) is byte-identical to the old full clone", () => {
   fill(50);

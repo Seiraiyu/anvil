@@ -1156,7 +1156,7 @@ function onEvent(url: string, e: ServerEvent): void {
       if (activeId && sessions.get(activeId)?.teamRole === "lead") renderTeamBoard(sessions.get(activeId)!);
       return;
     case "team.plan":
-      // A lead proposed a decomposition that needs approval (non-bypass autonomy). Park it as a card.
+      // A lead proposed a decomposition that needs approval (non-bypassPermissions mode). Park it as a card.
       pendingTeamPlans.set(e.sessionId, e.plan);
       renderSessions();
       if (e.sessionId === activeId) renderTeamBoard(sessions.get(activeId)!);

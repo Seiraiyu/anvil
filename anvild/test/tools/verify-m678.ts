@@ -13,7 +13,7 @@ let lastBudget: any = null;
 
 const ws = new WebSocket(url);
 ws.onopen = () =>
-  ws.send(stamp({ type: "session.create", cid: "c", source: "existing-dir", cwd, model: "sonnet", autonomy: "prompt-all" }));
+  ws.send(stamp({ type: "session.create", cid: "c", source: "existing-dir", cwd, model: "sonnet", permissionMode: "default" }));
 ws.onmessage = (ev) => {
   const m = JSON.parse(String((ev as MessageEvent).data));
   switch (m.type) {

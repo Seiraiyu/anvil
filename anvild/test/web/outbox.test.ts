@@ -32,6 +32,48 @@ test("enqueue appends and persists", () => {
   expect(JSON.parse(s.map.get("anvil.outbox")!)).toHaveLength(1);
 });
 
+// ── cc plan 4 task 6 / plan 8 parity: a client that queued commands PRE-upgrade (protocol delta 1,
+// autonomy→permissionMode) must flush valid post-upgrade shapes after the deploy straddle. ──
+
+test("pre-upgrade queued session.create is migrated on load (autonomy → permissionMode)", () => {
+  const legacy = {
+    cid: "old1",
+    tempId: "tmp_1",
+    serverUrl: "http://hub:7701",
+    cmd: { type: "session.create", source: "existing-dir", cwd: "/x", autonomy: "mostly-autonomous" },
+  };
+  const q = new OutboxQueue(fakeStorage(JSON.stringify([legacy])), "anvil.outbox");
+  const m = q.list()[0]!;
+  expect(m.cmd.permissionMode).toBe("bypassPermissions");
+  expect("autonomy" in m.cmd).toBe(false);
+  // The reconcile envelope survives the rewrite.
+  expect(m.tempId).toBe("tmp_1");
+  expect(m.serverUrl).toBe("http://hub:7701");
+  expect(m.cmd.cwd).toBe("/x");
+});
+
+test("pre-upgrade session.set_autonomy becomes session.set_permission_mode; unknown policy falls back", () => {
+  const s = fakeStorage(
+    JSON.stringify([
+      { cid: "a", cmd: { type: "session.set_autonomy", sessionId: "s1", policy: "allowlist" } },
+      { cid: "b", cmd: { type: "session.set_autonomy", sessionId: "s2", policy: "never-seen" } },
+      { cid: "c", cmd: { type: "session.create", source: "existing-dir", autonomy: "??" } },
+    ]),
+  );
+  const q = new OutboxQueue(s, "anvil.outbox");
+  const [a, b, c] = q.list();
+  expect(a!.cmd).toEqual({ type: "session.set_permission_mode", sessionId: "s1", mode: "default" });
+  expect(b!.cmd).toEqual({ type: "session.set_permission_mode", sessionId: "s2", mode: "default" });
+  expect(c!.cmd.permissionMode).toBe("default");
+});
+
+test("post-upgrade items pass through the migration untouched", () => {
+  const modern = { cid: "m", cmd: { type: "session.create", source: "existing-dir", permissionMode: "plan" } };
+  const q = new OutboxQueue(fakeStorage(JSON.stringify([modern, item("p")])), "anvil.outbox");
+  expect(q.list()[0]!.cmd).toEqual(modern.cmd);
+  expect(q.list()[1]!.cmd).toEqual({ type: "prompt.send" });
+});
+
 test("replace swaps the queue and persists (flush leftover)", () => {
   const s = fakeStorage(JSON.stringify([item("a"), item("b")]));
   const q = new OutboxQueue(s, "anvil.outbox");

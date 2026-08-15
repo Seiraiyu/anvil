@@ -1,11 +1,11 @@
 import { test, expect } from "bun:test";
 import { shouldAutoApprove, spawnPaused, relayExhausted, MAX_TEAM_RELAY_HOPS } from "../../src/integrations/team-gate";
 
-test("bypass auto-approves; everything else waits", () => {
-  expect(shouldAutoApprove("bypass")).toBe(true);
-  expect(shouldAutoApprove("mostly-autonomous")).toBe(false);
-  expect(shouldAutoApprove("allowlist")).toBe(false);
-  expect(shouldAutoApprove("prompt-all")).toBe(false);
+test("bypassPermissions auto-approves; everything else waits", () => {
+  expect(shouldAutoApprove("bypassPermissions")).toBe(true);
+  expect(shouldAutoApprove("default")).toBe(false);
+  expect(shouldAutoApprove("acceptEdits")).toBe(false);
+  expect(shouldAutoApprove("plan")).toBe(false);
 });
 
 test("member spawns pause only while the budget is in its warn zone", () => {

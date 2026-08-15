@@ -1,5 +1,4 @@
 import { envFile, envFileHasKey, looksLikeMeteredKey, mask, readEnvKey, removeEnvLine, upsertEnvLine } from "./env-file";
-import { clearBoundDegradeMarker } from "./degrade";
 
 /**
  * The daemon's Claude subscription OAuth token, set/reset from the UI (auth.set / auth.clear).
@@ -56,9 +55,6 @@ export function setClaudeToken(token: string, file: string = authEnvFile()): Aut
   }
   process.env[CLAUDE_TOKEN_KEY] = t;
   upsertEnvLine(file, CLAUDE_TOKEN_KEY, t);
-  // A successful credential write is the ONLY way out of auto-degraded mode besides a pair/rotation
-  // (which route through here too) — drop the marker so a restart doesn't come back degraded (§4.6).
-  clearBoundDegradeMarker();
   return claudeAuthStatus(process.env, file);
 }
 // (env-file read/write primitives live in ./env-file and are shared with the OpenRouter key store.)

@@ -5,7 +5,7 @@
  * input/resize/kill, and shutdown. These tests pin the behavior the extraction must preserve.
  */
 import { test, expect } from "bun:test";
-import { TerminalManager, cttyArgv, type SpawnTerminal, type TerminalSession } from "../../src/session/terminal-manager";
+import { TerminalManager, cttyArgv, cttyWrap, type SpawnTerminal, type TerminalSession } from "../../src/session/terminal-manager";
 
 test("cttyArgv wraps the shell so it acquires a controlling TTY (job control)", () => {
   expect(cttyArgv("linux", "/bin/bash")).toEqual(["setsid", "--ctty", "--wait", "/bin/bash"]);
@@ -25,11 +25,12 @@ function fakeSpawn() {
     rows: number;
     cwd: string;
     env: Record<string, string>;
+    command?: string[];
     onData: (b: Uint8Array) => void;
     pty: { resized: Array<[number, number]>; writes: Buffer[]; closed: boolean };
     exit: (code: number | null) => void;
   }> = [];
-  const spawn: SpawnTerminal = ({ cols, rows, cwd, env, onData }) => {
+  const spawn: SpawnTerminal = ({ cols, rows, cwd, env, onData, command }) => {
     let resolveExit!: (c: number | null) => void;
     const proc = { exited: new Promise<number | null>((r) => (resolveExit = r)) };
     const pty = {
@@ -46,7 +47,7 @@ function fakeSpawn() {
         this.closed = true;
       },
     };
-    created.push({ cols, rows, cwd, env, onData, pty, exit: resolveExit });
+    created.push({ cols, rows, cwd, env, command, onData, pty, exit: resolveExit });
     return { pty, proc };
   };
   return { spawn, created };
@@ -208,4 +209,42 @@ test("terminal cap: the 9th open throws BadCommand", () => {
   const mgr = mgrWith(session, spawn);
   for (let i = 1; i <= 8; i++) mgr.open("s1", 80, 24, String(i));
   expect(() => mgr.open("s1", 80, 24, "9")).toThrow(/8 terminals/);
+});
+
+test("cttyWrap wraps multi-arg commands (cc plan 6 attach: claude --resume)", () => {
+  expect(cttyWrap("linux", ["claude", "--resume", "sid"])).toEqual(["setsid", "--ctty", "--wait", "claude", "--resume", "sid"]);
+  expect(cttyWrap("darwin", ["claude", "--resume", "sid"])).toEqual(["script", "-q", "/dev/null", "claude", "--resume", "sid"]);
+  expect(cttyWrap("win32", ["claude"])).toEqual(["claude"]);
+});
+
+test("open with a command spawns it, titles the chip, sorts it last, and fires onExit", async () => {
+  const { session } = fakeSession();
+  const { spawn, created } = fakeSpawn();
+  const { mgr, rosters } = mgrWithRoster(session, spawn);
+  let exited = -1;
+
+  mgr.open("s1", 80, 24); // plain shell first (termId "1")
+  mgr.open("s1", 80, 24, "cc", { command: ["claude", "--resume", "sid-1"], title: "claude", onExit: (code) => (exited = code) });
+  expect(created.length).toBe(2);
+  expect(created[1]!.command).toEqual(["claude", "--resume", "sid-1"]);
+  // named ids sort after numeric ones, with the given title
+  expect(mgr.roster("s1")).toEqual([
+    { id: "1", title: (process.env.SHELL || "/bin/zsh").split("/").pop()! },
+    { id: "cc", title: "claude" },
+  ]);
+
+  created[1]!.exit(0);
+  await new Promise((r) => setTimeout(r, 10));
+  expect(exited).toBe(0);
+  expect(mgr.roster("s1")).toEqual([{ id: "1", title: (process.env.SHELL || "/bin/zsh").split("/").pop()! }]);
+  // onExit fired AFTER the roster update (the attach lifecycle relies on this ordering)
+  expect(rosters[rosters.length - 1]!.terminals.map((t) => t.id)).toEqual(["1"]);
+});
+
+test("open with a command but no title falls back to the binary's basename", () => {
+  const { session } = fakeSession();
+  const { spawn } = fakeSpawn();
+  const mgr = mgrWith(session, spawn);
+  mgr.open("s1", 80, 24, "cc", { command: ["/opt/cc/bin/claude", "--resume", "x"] });
+  expect(mgr.roster("s1")).toEqual([{ id: "cc", title: "claude" }]);
 });

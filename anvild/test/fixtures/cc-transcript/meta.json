@@ -1,0 +1,14 @@
+{
+  "ccVersion": "2.1.231 (Claude Code)",
+  "cwd": "/tmp/anvil-cc-transcript-PcYUSe",
+  "slug": "-tmp-anvil-cc-transcript-PcYUSe",
+  "sessionId": "bbc5b498-2fac-44e1-9071-67a86d923c1f",
+  "ptySessionId": "bbc5b498-2fac-44e1-9071-67a86d923c1f",
+  "magicWord": "xylophone",
+  "ptyMarker": "pty-marker-xyzzy",
+  "lineCounts": {
+    "afterA": 13,
+    "afterB": 20,
+    "final": 34
+  }
+}

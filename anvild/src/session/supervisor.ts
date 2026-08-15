@@ -6,7 +6,7 @@ import {
   type AttachmentRef,
   type DirEntry,
   type FileContent,
-  type AutonomyPolicy,
+  type PermissionMode,
   type Budget,
   type BudgetEvent,
   type DaemonUpdateResultEvent,
@@ -38,6 +38,8 @@ import {
   type GitCmd,
   type GitResultEvent,
   isModel,
+  isPermissionMode,
+  CC_ATTACH_TERM_ID,
   type Model,
   type PermissionDecision,
   type QuestionAnswer,
@@ -50,19 +52,25 @@ import {
   type ResumeWatermarksEvent,
   type TelemetrySnapshotEvent,
 } from "@protocol";
-import { GOAL_MAX_ITERATIONS, parseGoalCommand, type GoalCommand } from "../agent/goal";
+import { GOAL_MAX_ITERATIONS, judgeGoal, parseGoalCommand, type GoalCommand, type GoalVerdict } from "../agent/goal";
 import { now } from "../util/envelope";
 import { newId } from "../util/ids";
 import type { ConnectionRegistry } from "../server/registry";
 import { discoverSelfBaseUrl } from "../server/fleet";
 import { Session } from "./session";
 import { SessionStore } from "./store";
-import { TerminalManager } from "./terminal-manager";
+import { TerminalManager, type SpawnTerminal } from "./terminal-manager";
 import { FileWatchManager } from "./file-watch-manager";
 import { createWorktree, gitStatus, gitStatusAsync, recreateWorktree, removeWorktree, worktreeHealth } from "./worktree";
-import { AgentDriver, type TurnUsage } from "../agent/driver";
-import { skillPlugins } from "../agent/skills";
+import { TurnRunner, type SessionDriver, type TurnUsage } from "../cc/turn-runner";
+import { resolveCcCommand } from "../cc/install";
+import { NEW_TOPIC_DIVIDER_LABEL, reconcileTranscript } from "../cc/reconcile";
+import { transcriptPath } from "../cc/transcript";
+import { CcMcpConfig, CC_PERMISSION_TOOL } from "../cc/mcp-config";
+import { handleCcMcp } from "../cc/permission-server";
+import { handleToolServer, type AnvilToolServer } from "../cc/tool-host";
 import type { PlanProposedHook } from "../agent/permissions";
+import { inlineBudget, type InlineAttachment } from "../agent/attachments";
 import { buildDefaultToolsServer, DEFAULT_MCP_SERVER_NAME, DEFAULT_TOOL_IDS } from "../agent/default-tools";
 import { TEAM_MCP_SERVER_NAME, TEAM_TOOL_IDS } from "../agent/team-tools";
 import { MEMBER_MCP_SERVER_NAME, MEMBER_TOOL_IDS } from "../agent/member-tools";
@@ -106,7 +114,6 @@ import { updateApply, updateCheck, type UpdateApiDeps } from "../daemon/update-a
 import { VERSION } from "../version";
 import { pickIcon } from "../agent/icon";
 import { classifyBranchKind } from "../agent/branch-kind";
-import { AuthDegradeTracker, type DegradeMarker } from "../auth/degrade";
 import { WebPush, type PushPayload } from "../push/webpush";
 import { Fcm } from "../push/fcm";
 import { Apns } from "../push/apns";
@@ -139,6 +146,10 @@ export interface SupervisorConfig {
   envFile?: string;
   /** The tailnet-facing port (== ANVIL_PORT). Used to build this daemon's self-URL for deep links. */
   port?: number;
+  /** The daemon's bound host — the CC CLI's MCP config points back at it (cc plan 4). */
+  host?: string;
+  /** Test-only override of the goal judge (the real one spawns a haiku one-shot). */
+  goalJudge?: (condition: string, transcript: string, env: Record<string, string>) => Promise<GoalVerdict>;
   /** Where repos added by git URL get cloned (see `Config.clonesDir`). Defaults to `<stateDir>/repos`. */
   clonesDir?: string;
   warnFraction?: number;
@@ -153,6 +164,8 @@ export interface SupervisorConfig {
   adversarialModels?: string[];
   /** Preferred OpenRouter provider slug for the panel (see `Config.adversarialProvider`). */
   adversarialProvider?: string;
+  /** Test-only PTY factory override (the real one spawns Bun.Terminal + a shell / `claude --resume`). */
+  spawnTerminal?: SpawnTerminal;
 }
 
 /**
@@ -164,7 +177,7 @@ export interface SupervisorConfig {
 export class Supervisor {
   private readonly store: SessionStore;
   private readonly sessions = new Map<string, Session>();
-  private readonly drivers = new Map<string, AgentDriver>();
+  private readonly drivers = new Map<string, SessionDriver>();
   private readonly logs = new Map<string, EventLog>();
   /** Resilience telemetry (v4, §5.7): the daemon's own counters + the latest report from each client. */
   private readonly serverCounters: Record<string, number> = { resumeDelta: 0, resumeSnapshot: 0, promptDeduped: 0 };
@@ -178,6 +191,10 @@ export class Supervisor {
   private telemetryBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly broker = new PermissionBroker();
   private readonly questionBroker = new QuestionBroker();
+  /** Per-session MCP bearer + .mcp.json writer for the CLI-direct transport (cc plan 4). */
+  private readonly ccMcpCfg: CcMcpConfig;
+  /** The goal judge (cc plan 5 stop hook); injectable so tests never spawn the one-shot. */
+  private readonly goalJudge: NonNullable<SupervisorConfig["goalJudge"]>;
   /** Sessions whose awaiting_permission state has been announced to the whole fleet (list badge). */
   private readonly awaitingAnnounced = new Set<string>();
   /** Sessions with an outstanding "your turn" push out on devices — so we can send a matching
@@ -243,9 +260,7 @@ export class Supervisor {
   private readonly pairedHub?: PairedHubStore;
   private readonly onRosterChanged?: (reason: string) => void;
   private readonly envFile?: string;
-  /** Auto-degrade on credential failure (§4.6). Assigned in the constructor — `stateDir` isn't known
-   *  at field-initializer time. Also the read model for "is this machine degraded?" everywhere else. */
-  readonly authDegrade!: AuthDegradeTracker;
+
   private readonly selfPort: number;
   /** Cached self base URL (deep-link target) — discovery shells out to `tailscale`, so cache it. */
   private selfBaseUrlCache?: { url: string | undefined; at: number };
@@ -253,21 +268,21 @@ export class Supervisor {
   constructor(cfg: SupervisorConfig, private readonly registry: ConnectionRegistry) {
     this.renderer = cfg.renderer ?? new PassthroughRenderer();
     this.selfPort = cfg.port ?? 7701;
+    this.ccMcpCfg = new CcMcpConfig({ stateDir: cfg.stateDir, host: cfg.host, port: cfg.port ?? 7701 });
+    this.goalJudge = cfg.goalJudge ?? judgeGoal;
     this.clonesDir = cfg.clonesDir ?? join(cfg.stateDir, "repos");
     this.adversarial = {
       models: cfg.adversarialModels ?? [],
       provider: cfg.adversarialProvider,
     };
     this.stateDir = cfg.stateDir;
+    this.terminalMgr = this.buildTerminalManager(cfg.spawnTerminal);
     this.accounts = cfg.accounts ?? new AccountStore(cfg.stateDir);
     this.pairedHub = cfg.pairedHub;
     this.onRosterChanged = cfg.onRosterChanged;
     this.envFile = cfg.envFile;
     // `(this as …)` — the field is `readonly` for every reader but must be assigned here, after
     // stateDir is known. The push registries aren't constructed yet, so notify lazily through `this`.
-    (this as { authDegrade: AuthDegradeTracker }).authDegrade = new AuthDegradeTracker(cfg.stateDir, (marker) =>
-      this.notifyAuthDegraded(marker),
-    );
     this.store = new SessionStore(cfg.stateDir);
     this.envStore = new EnvironmentStore(cfg.stateDir);
     this.environments = new EnvironmentService({
@@ -336,8 +351,6 @@ export class Supervisor {
       require: (id) => this.require(id),
       budget: () => this.budget(),
       handoffCreate: (a) => this.handoffCreate(a),
-      authDegraded: () => this.authDegrade.degraded(),
-      claimDegradeEpisodeAlert: () => this.authDegrade.claimEpisodeAlert(),
       pushSystemAlert: (title, body, tag) => this.pushSystemAlert(title, body, tag),
       notifyAll: (payload) => {
         void this.webpush.notify(payload);
@@ -692,8 +705,8 @@ export class Supervisor {
   autopilotPlansEvent(cid?: string): AutopilotPlansEvent {
     return this.autopilot.autopilotPlansEvent(cid);
   }
-  startPlanningSession(workUnitId: string, model?: Model, autonomy?: AutonomyPolicy, cid?: string): Promise<AutopilotStartedEvent> {
-    return this.autopilot.startPlanningSession(workUnitId, model, autonomy, cid);
+  startPlanningSession(workUnitId: string, model?: Model, permissionMode?: PermissionMode, cid?: string): Promise<AutopilotStartedEvent> {
+    return this.autopilot.startPlanningSession(workUnitId, model, permissionMode, cid);
   }
 
   // ── Loops (loop-engineering: one surface naming every active loop) ────────────────────
@@ -744,8 +757,8 @@ export class Supervisor {
   clearAutopilot(cid?: string): Promise<AutopilotMaintenanceResultEvent> {
     return this.autopilot.clearAutopilot(cid);
   }
-  startPlan(workUnitId: string, model?: Model, autonomy?: AutonomyPolicy, cid?: string): Promise<AutopilotStartedEvent> {
-    return this.autopilot.startPlan(workUnitId, model, autonomy, cid);
+  startPlan(workUnitId: string, model?: Model, permissionMode?: PermissionMode, cid?: string): Promise<AutopilotStartedEvent> {
+    return this.autopilot.startPlan(workUnitId, model, permissionMode, cid);
   }
   linkPlan(workUnitId: string, sessionId: string, cid?: string): AutopilotStartedEvent {
     return this.autopilot.linkPlan(workUnitId, sessionId, cid);
@@ -950,7 +963,7 @@ export class Supervisor {
       worktree,
       git: await gitStatusAsync(cwd),
       model: cmd.model ?? "opus",
-      autonomy: cmd.autonomy ?? "mostly-autonomous",
+      permissionMode: cmd.permissionMode ?? "bypassPermissions",
       adversarialReview: cmd.adversarialReview ?? false,
       status: "idle",
       createdAt: now(),
@@ -989,7 +1002,7 @@ export class Supervisor {
     base?: string;
     title: string;
     model?: Model;
-    autonomy?: AutonomyPolicy;
+    permissionMode?: PermissionMode;
     brief: string;
     // ── Teams: link the new session to a lead as a member (see docs/plans/anvil-team-support.md) ──
     parentId?: string;
@@ -1019,7 +1032,7 @@ export class Supervisor {
         title: a.title,
         environmentId: env?.id,
         model: a.model,
-        autonomy: a.autonomy,
+        permissionMode: a.permissionMode,
       };
     } else {
       if (!a.cwd) throw new BadCommand("cwd is required for an existing-dir handoff");
@@ -1032,7 +1045,7 @@ export class Supervisor {
         title: a.title,
         environmentId: a.environmentId,
         model: a.model,
-        autonomy: a.autonomy,
+        permissionMode: a.permissionMode,
       };
     }
     const session = await this.create(cmd);
@@ -1206,7 +1219,6 @@ export class Supervisor {
   private maybeReflectOnClaudeMd(id: string): void {
     try {
       if (!claudeMdReflectionEnabled()) return;
-      if (this.authDegrade.degraded()) return;
       if (this.reflectedSessions.has(id)) return;
       const s = this.sessions.get(id);
       if (!s) return; // session gone (e.g. killed between call and here)
@@ -1231,6 +1243,7 @@ export class Supervisor {
     await this.drivers.get(id)?.stop();
     this.drivers.delete(id);
     this.fileWatchMgr.clear(id);
+    this.ccDetach(id, "archived"); // release the attach gate + backfill PTY turns BEFORE the PTYs are reaped
     this.terminalMgr.kill(id);
     s.data.archived = true;
     s.data.status = "idle";
@@ -1263,24 +1276,79 @@ export class Supervisor {
 
   // Terminal channel (arch §7): a persistent PTY per session via Bun.Terminal. Extracted to
   // TerminalManager (unit-tested); the Supervisor just adapts a session id to {cwd, emit}.
-  private readonly terminalMgr = new TerminalManager(
-    (sessionId) => {
-      const s = this.require(sessionId);
-      return { cwd: s.data.cwd, emit: (body) => s.emit(body) };
-    },
-    (sessionId) => this.shellEnv(this.sessions.get(sessionId)),
-    (sessionId, terminals) => {
-      // The roster rides the Session (additive `terminals`, design 2026-08-08) so every device's
-      // chip strip stays live. Runtime-only: restore() clears it — PTYs die with the process.
-      const s = this.sessions.get(sessionId);
-      if (!s) return; // roster change raced a session kill
-      s.data.terminals = terminals.length ? terminals : undefined;
-      this.broadcastUpdated(s.data);
-    },
-  );
+  // Constructed in the constructor (not a field initializer) so tests can inject cfg.spawnTerminal.
+  private readonly terminalMgr: TerminalManager;
+
+  private buildTerminalManager(spawn?: SpawnTerminal): TerminalManager {
+    return new TerminalManager(
+      (sessionId) => {
+        const s = this.require(sessionId);
+        return { cwd: s.data.cwd, emit: (body) => s.emit(body) };
+      },
+      (sessionId) => this.shellEnv(this.sessions.get(sessionId)),
+      (sessionId, terminals) => {
+        // The roster rides the Session (additive `terminals`, design 2026-08-08) so every device's
+        // chip strip stays live. Runtime-only: restore() clears it — PTYs die with the process.
+        const s = this.sessions.get(sessionId);
+        if (!s) return; // roster change raced a session kill
+        s.data.terminals = terminals.length ? terminals : undefined;
+        this.broadcastUpdated(s.data);
+      },
+      ...(spawn ? [spawn] : []),
+    );
+  }
 
   terminalOpen(sessionId: string, cols: number, rows: number, termId?: string): void {
+    // The attach PTY's id is reserved: terminal.open on it REPLAYS an existing attach (scrollback)
+    // but never spawns a plain shell there — that chip must always be `claude --resume`.
+    if (termId === CC_ATTACH_TERM_ID && !this.terminalMgr.has(sessionId, CC_ATTACH_TERM_ID)) {
+      throw new BadCommand("no attached terminal — use Attach first");
+    }
     this.terminalMgr.open(sessionId, cols, rows, termId);
+  }
+
+  /** Attach the session's CC conversation to a real terminal (cc plan 6, design §4.9): only from
+   *  `idle` with nothing parked; spawns `claude --resume <id>` in a dedicated PTY and blocks
+   *  headless prompts until detach. The PTY rides the normal terminal channel (chip "cc"). */
+  ccAttach(id: string, cols: number, rows: number): void {
+    const s = this.require(id);
+    if (s.data.attached) throw new BadCommand("this session is already attached to a terminal");
+    const claudeSessionId = s.data.claudeSessionId;
+    if (!claudeSessionId) throw new BadCommand("nothing to attach yet — send a prompt first so a Claude Code conversation exists");
+    // Only from idle (design §7): a live turn, or a parked permission/question card, owns the
+    // conversation. (Kill-during-awaiting force-resolves cards first — plan 4 task 8 semantics.)
+    if (s.data.status !== "idle" || s.hasPendingPermission() || s.hasPendingQuestion()) {
+      throw new BadCommand(`can't attach while the session is ${s.data.status} — wait for idle (or interrupt first)`);
+    }
+    const driver = this.drivers.get(id);
+    if (driver instanceof TurnRunner && driver.turnState !== "idle" && driver.turnState !== "error") {
+      throw new BadCommand("can't attach while a turn is in flight — interrupt it first");
+    }
+    s.data.attached = true;
+    this.terminalMgr.open(id, cols, rows, CC_ATTACH_TERM_ID, {
+      command: [...resolveCcCommand(process.env), "--resume", claudeSessionId],
+      title: "claude",
+      // User quit CC in the terminal (or the PTY died): that IS a detach — reconcile + release.
+      onExit: () => this.ccDetach(id, "terminal exited"),
+    });
+    this.broadcastUpdated(s.data);
+    console.log(`[cc ${id}] attached: claude --resume ${claudeSessionId} in PTY`);
+  }
+
+  /** End a terminal attach (explicit command, PTY exit, or session teardown): kill the PTY,
+   *  backfill the TUI turns from the transcript, release the prompt gate. Idempotent. */
+  ccDetach(id: string, reason = "detach requested"): void {
+    const s = this.sessions.get(id);
+    if (!s || !s.data.attached) return;
+    s.data.attached = false;
+    this.terminalMgr.closeOne(id, CC_ATTACH_TERM_ID); // no-op when the PTY already exited
+    // Disk is truth: whatever was typed in the terminal is in the transcript — project it into
+    // every client's history. (The TUI may also have COMPACTED or /clear-ed; uuids keep us safe.)
+    this.reconcileFromTranscript(id, `pty detach (${reason})`);
+    if (s.data.status !== "idle") s.setStatus("idle");
+    this.persist();
+    this.broadcastUpdated(s.data);
+    console.log(`[cc ${id}] detached (${reason})`);
   }
   terminalInput(sessionId: string, dataBase64: string, termId?: string): void {
     this.terminalMgr.input(sessionId, dataBase64, termId);
@@ -1298,6 +1366,11 @@ export class Supervisor {
     this.require(sessionId);
     return this.attachStore.add(sessionId, name, mediaType, dataBase64);
   }
+  /** Streaming upload (§6.5) — the body goes to disk without being held in memory. */
+  addAttachmentStream(sessionId: string, name: string, mediaType: string, body: ReadableStream<Uint8Array> | null): Promise<AttachmentRef> {
+    this.require(sessionId);
+    return this.attachStore.addStream(sessionId, name, mediaType, body);
+  }
   attachmentBytes(sessionId: string, id: string): { mediaType: string; path: string } | undefined {
     return this.attachStore.bytes(sessionId, id);
   }
@@ -1308,13 +1381,10 @@ export class Supervisor {
     // Exactly-once (v4, spec A5): a re-flushed offline send carries the same cid. If we've already
     // applied it, record nothing new and don't run the turn again — the dispatcher re-acks it.
     if (cid && s.isPromptApplied(cid)) return;
-    // Degraded machine (no usable Claude token): stop here with the explicit §4.3 message instead of
-    // letting `buildAgentEnv` throw out through the dispatcher as an opaque command error. The user's
-    // text is deliberately NOT echoed — nothing consumed it, so a bubble with no reply would be a lie.
-    if (this.authDegrade.degraded()) {
-      s.emitError(NO_CLAUDE_TOKEN_ERROR, false);
-      return;
-    }
+    // Attached gate (cc plan 6 §4.9): while a real terminal owns the conversation, a headless
+    // turn would fork CC's session state under the TUI's feet. Deliberately BEFORE the cid is
+    // recorded — the same send, re-flushed after detach, should run.
+    if (s.data.attached) throw new BadCommand("this session is attached to a terminal — detach it to chat from here");
     if (s.data.archived) {
       s.data.archived = false; // prompting reactivates an archived session
       this.broadcastUpdated(s.data);
@@ -1369,9 +1439,9 @@ export class Supervisor {
     const attachments = attachmentIds
       .map((aid) => this.attachStore.ref(id, aid))
       .filter((r): r is AttachmentRef => r !== undefined);
-    const inline = attachmentIds
-      .map((aid) => this.attachStore.loadForAgent(id, aid))
-      .filter((x): x is { mediaType: string; name: string; data: string } => x !== undefined);
+    // Bounded per media type (inlineBudget): a big log or archive contributes kilobytes here, not
+    // its full size — this used to read every attachment whole on every turn.
+    const inline: InlineAttachment[] = attachmentIds.flatMap((aid) => this.attachStore.loadForAgent(id, aid, inlineBudget) ?? []);
 
     // Remember the opening brief (once) so the first turn can classify the remote branch prefix
     // from what the user actually asked for (arch §8) — the local slug alone is too terse.
@@ -1385,59 +1455,176 @@ export class Supervisor {
     this.ensureDriver(id).prompt(text, inline);
   }
 
-  /** A turn threw. Classify it: two consecutive 401/403-class failures mean the credential is dead, so
-   *  the daemon degrades itself back into the pairing flow rather than failing every future turn the
-   *  same opaque way (§4.6). Anything else (network, timeout, 429) resets the streak. */
+  /** A turn threw. CC owns auth outcomes now (cc plan 4, "defer-to-CC"): the error already
+   *  surfaced in the session; nothing daemon-side to classify. Kept as the drivers' seam. */
   private onTurnError(err: unknown): void {
-    this.authDegrade.recordTurnFailure(err);
+    void err;
   }
 
-  /** Get the session's live driver, creating it lazily on first use (arch §6.2). */
-  private ensureDriver(id: string): AgentDriver {
+  /** Heal one session's event log from its on-disk CC transcript (cc plan 6, design §4.9 —
+   *  "disk is truth"). Idempotent and dedupe-guarded (ccUuid + prompt-text matching, plus the
+   *  pre-plan-6 legacy guard), so calling it on boot, after an abnormal turn end, or after a
+   *  PTY detach is always safe. Best-effort: a reconcile failure never takes the session down. */
+  reconcileFromTranscript(id: string, reason: string): number {
+    const s = this.sessions.get(id);
+    const log = this.logs.get(id);
+    const claudeSessionId = s?.data.claudeSessionId;
+    if (!s || s.isDisposed || !log || !claudeSessionId) return 0;
+    try {
+      const r = reconcileTranscript(transcriptPath(s.data.cwd, claudeSessionId), {
+        renderer: this.renderer,
+        events: () => log.since(0),
+        emit: (b) => s.emit(b),
+      });
+      for (const w of r.warns) console.warn(`[reconcile ${id}] ${w}`);
+      if (r.backfilled > 0) {
+        console.log(`[reconcile ${id}] backfilled ${r.backfilled} event(s) from transcript (${reason})`);
+        this.persist();
+        this.broadcastUpdated(s.data);
+      }
+      return r.backfilled;
+    } catch (e) {
+      console.error(`[reconcile ${id}] failed (${reason}): ${e instanceof Error ? e.message : e}`);
+      return 0;
+    }
+  }
+
+  /** Get the session's live driver, creating it lazily on first use (arch §6.2). CLI-direct is
+   *  the ONLY transport since cc plan 7 (the SDK AgentDriver and its ANVIL_CC_DIRECT opt-in flag
+   *  are gone — flag-flip pulled forward from plan 8, decision 2026-08-13). */
+  private ensureDriver(id: string): SessionDriver {
     let driver = this.drivers.get(id);
     if (!driver) {
       const s = this.require(id);
-      const isDefault = s.data.isDefault === true;
-      const isLead = s.data.teamRole === "lead";
-      const isMember = s.data.teamRole === "member" && !!s.data.parentId;
-      const isPlanner = s.data.workUnitRole === "planner" && !!s.data.workUnitId;
-      driver = new AgentDriver(
-        s,
-        this.renderer,
-        this.broker,
-        this.questionBroker,
-        this.agentEnv(s),
-        (usage) => this.onAgentResult(id, usage),
-        isDefault
-          ? { [DEFAULT_MCP_SERVER_NAME]: this.defaultToolsServer }
-          : isLead
-            ? { [TEAM_MCP_SERVER_NAME]: this.teams.buildTeamServer(id) }
-            : isMember
-              ? { [MEMBER_MCP_SERVER_NAME]: this.teams.buildMemberServer(id) }
-              : isPlanner
-                ? { [PLANNING_MCP_SERVER_NAME]: this.autopilot.buildPlanningServer(id) }
-                : undefined,
-        isDefault ? DEFAULT_TOOL_IDS : isLead ? TEAM_TOOL_IDS : isMember ? MEMBER_TOOL_IDS : isPlanner ? PLANNING_TOOL_IDS : undefined,
-        this.planReviewer(s),
-        undefined, // queryFn — keep the SDK default
-        skillPlugins({ cwd: s.data.cwd, sessionId: id, stateDir: this.stateDir }),
-        (commands) => this.onSessionCommands(id, commands),
-        (err) => this.onTurnError(err),
-        (met, goal) => this.onGoalResolved(id, met, goal),
-        () => {
-          this.persist();
-          this.broadcastUpdated(s.data);
-          this.broadcastLoops(); // each unmet attempt bumps the loop's live iteration count
+      driver = new TurnRunner({
+        session: s,
+        renderer: this.renderer,
+        env: this.agentEnv(s),
+        onResult: (usage) => this.onAgentResult(id, usage),
+        onCommands: (commands) => this.onSessionCommands(id, commands),
+        onTurnError: (err) => this.onTurnError(err),
+        // Disk is truth (cc plan 6 §4.9): a turn that ended without a result may have
+        // landed more in the transcript than the stream delivered — heal immediately.
+        onAbnormalEnd: () => this.reconcileFromTranscript(id, "abnormal turn end"),
+        // The daemon's approve tool answers everything CC's engine would prompt for — including
+        // AskUserQuestion (spike finding c) — and the session's role tool server + the goal
+        // Stop hook ride the same per-spawn config, so bearer rotations and role changes land.
+        permissionArgs: () => {
+          const overlay = this.ccMcpCfg.writeSettingsOverlay(id, { goalStopHook: true });
+          const ids = this.ccToolIdsFor(s);
+          return [
+            "--mcp-config", this.ccMcpCfg.writeConfig(id, this.ccToolServerFor(s) ? [this.ccToolServerFor(s)!.name] : []),
+            "--permission-prompt-tool", CC_PERMISSION_TOOL,
+            ...(ids.length ? ["--allowedTools", ids.join(",")] : []),
+            ...(overlay ? ["--settings", overlay] : []),
+          ];
         },
-      );
+      });
       this.drivers.set(id, driver);
     }
     return driver;
   }
 
   interrupt(id: string): void {
-    this.require(id);
+    const s = this.require(id);
+    // Kill-during-awaiting (cc plan 4 task 8, design §7): a turn blocked in the MCP approve tool
+    // is awaiting a broker promise; SIGINT alone would strand it (and the card) forever. Force-deny
+    // parked prompts FIRST — the approve handler returns deny, the CLI can wind down cleanly — and
+    // retire the cards on every device. CC records the denial in its transcript, so the next
+    // --resume does not re-ask.
+    const denied = this.broker.resolveSession(id, "deny");
+    const cancelled = this.questionBroker.resolveSession(id);
+    if (denied > 0 || cancelled > 0) {
+      s.resolveAllPermissions();
+      s.resolveAllQuestions();
+    }
     void this.drivers.get(id)?.interrupt();
+  }
+
+  /** The CC CLI's MCP endpoints for one session (cc plans 4–5). Bearer-gated: only the CLI
+   *  process holding this session's .mcp.json can reach the brokers/tools. No `server` ⇒ the
+   *  anvild approve tool (design §4.4); a server name ⇒ that role's daemon-hosted tool server
+   *  (design §4.5) — resolved per request so per-session deps (team/member/planning) stay live. */
+  async ccMcpRequest(sessionId: string, req: Request, server?: string): Promise<Response> {
+    if (!this.ccMcpCfg.verify(sessionId, req.headers.get("authorization"))) {
+      return new Response("unauthorized", { status: 401 });
+    }
+    const s = this.sessions.get(sessionId);
+    if (!s) return new Response("no such session", { status: 404 });
+    if (!server) {
+      return handleCcMcp(req, {
+        session: s,
+        broker: this.broker,
+        questionBroker: this.questionBroker,
+        // ExitPlanMode → adversarial plan review (advisory) before the approval card (cc plan 8).
+        planProposed: this.planReviewer(s),
+      });
+    }
+    const toolServer = this.ccToolServerFor(s);
+    if (!toolServer || toolServer.name !== server) return new Response(`no such tool server: ${server}`, { status: 404 });
+    return handleToolServer(req, toolServer);
+  }
+
+  /** The session's role tool server, or undefined for plain sessions — the old AgentDriver
+   *  4-way ternary, now resolved at request/spawn time (cc plan 5 task 2). */
+  private ccToolServerFor(s: Session): AnvilToolServer | undefined {
+    if (s.data.isDefault === true) return this.defaultToolsServer;
+    if (s.data.teamRole === "lead") return this.teams.buildTeamServer(s.id);
+    if (s.data.teamRole === "member" && s.data.parentId) return this.teams.buildMemberServer(s.id);
+    if (s.data.workUnitRole === "planner" && s.data.workUnitId) return this.autopilot.buildPlanningServer(s.id);
+    return undefined;
+  }
+
+  /** The pre-approved tool ids for the session's role server (`--allowedTools`). */
+  private ccToolIdsFor(s: Session): string[] {
+    if (s.data.isDefault === true) return [...DEFAULT_TOOL_IDS];
+    if (s.data.teamRole === "lead") return [...TEAM_TOOL_IDS];
+    if (s.data.teamRole === "member" && s.data.parentId) return [...MEMBER_TOOL_IDS];
+    if (s.data.workUnitRole === "planner" && s.data.workUnitId) return [...PLANNING_TOOL_IDS];
+    return [];
+  }
+
+  /**
+   * The CC `Stop` hook callback (cc plan 5 task 4) — agent/goal.ts `makeStopHook` semantics over
+   * HTTP. The overlay's curl POSTs the hook's stdin JSON here; our JSON reply is the hook's
+   * stdout. Hard-won contract (goal.ts spike): an unmet goal must answer
+   * `{"decision":"block","reason"}` — additionalContext is refused by the model as injection.
+   */
+  async ccStopHook(sessionId: string, req: Request): Promise<Response> {
+    if (!this.ccMcpCfg.verify(sessionId, req.headers.get("authorization"))) {
+      return new Response("unauthorized", { status: 401 });
+    }
+    const s = this.sessions.get(sessionId);
+    if (!s) return new Response("no such session", { status: 404 });
+    await req.text().catch(() => ""); // drain the hook's stdin payload; goal state lives daemon-side
+
+    const goal = s.data.goal;
+    // Free path: the overwhelming majority of stops belong to sessions with no goal.
+    if (!goal || goal.paused) return Response.json({});
+    if (goal.iterations >= GOAL_MAX_ITERATIONS) {
+      s.data.goal = undefined;
+      this.onGoalResolved(sessionId, false, goal);
+      return Response.json({});
+    }
+    let verdict: GoalVerdict;
+    try {
+      // shellEnv (token-optional): a missing credential surfaces as a failed judge → fail-open,
+      // not a thrown env build (the judge itself needs the token; the hook must not).
+      verdict = await this.goalJudge(goal.condition, s.recentTurns.join("\n"), this.shellEnv(s));
+    } catch {
+      return Response.json({}); // D6: fail open — never trap a session on an unreachable judge
+    }
+    if (verdict.met) {
+      s.data.goal = undefined;
+      this.onGoalResolved(sessionId, true, goal);
+      return Response.json({});
+    }
+    goal.iterations += 1;
+    goal.lastReason = verdict.reason;
+    this.persist();
+    this.broadcastUpdated(s.data);
+    this.broadcastLoops(); // each unmet attempt bumps the loop's live iteration count
+    return Response.json({ decision: "block", reason: `[${goal.condition}]: ${verdict.reason}` });
   }
 
   /** Answer a parked permission prompt (arch §6.6) — may come from any device. */
@@ -1491,14 +1678,6 @@ export class Supervisor {
 
   /** The auto-degrade notification (HJ-29). Also broadcast on the wire so an OPEN client flips to the
    *  setup takeover immediately, rather than only on its next reload. */
-  private notifyAuthDegraded(marker: DegradeMarker): void {
-    this.broadcastAuthState();
-    this.pushSystemAlert(
-      "Anvil can't reach Claude",
-      `This machine's Claude login stopped working (${marker.reason}). Turns are paused until it's re-paired.`,
-      "auth-degraded",
-    );
-  }
 
   /** Tell every connected client this machine's auth/pairing state changed, so the setup takeover can
    *  appear (degraded) or disappear (paired) live. */
@@ -1526,9 +1705,10 @@ export class Supervisor {
     this.persist();
     this.broadcastUpdated(s.data);
   }
-  setAutonomy(id: string, policy: AutonomyPolicy): void {
+  setPermissionMode(id: string, mode: PermissionMode): void {
+    if (!isPermissionMode(mode)) return; // ignore junk rather than pass it to the CLI
     const s = this.require(id);
-    s.data.autonomy = policy;
+    s.data.permissionMode = mode;
     s.data.lastActivityAt = now();
     this.persist();
     this.broadcastUpdated(s.data);
@@ -1567,6 +1747,10 @@ export class Supervisor {
    * never blocks the plan. Self-gates every call (not at construction) so a toggle flip or an OpenRouter
    * key set from Settings → Models mid-session takes effect on the very next plan, mirroring how the
    * autopilot panel resolves its key live (see runAutopilot). (adversarial panel)
+   *
+   * Rides the CC approve tool since cc plan 8: ExitPlanMode arrives at handleCcMcp like any other
+   * prompt-worthy call, and the permission server awaits this hook with `input.plan` before parking
+   * the approval card — critique first, then the human decides.
    */
   private planReviewer(s: Session): PlanProposedHook {
     return async (plan: string) => {
@@ -1687,9 +1871,11 @@ export class Supervisor {
     await this.drivers.get(id)?.stop(); // a wedged/stale query is dropped; next prompt starts fresh
     this.drivers.delete(id);
     this.fileWatchMgr.clear(id);
+    this.ccDetach(id, "reset"); // reset must never LEAVE a stuck attached-gate (it's the recovery path)
     this.terminalMgr.kill(id);
     this.broker.resolveSession(id, "deny"); // unblock any hook parked on this session
     this.questionBroker.resolveSession(id); // cancel any AskUserQuestion parked on this session
+    this.ccMcpCfg.rotate(id); // stale CLI .mcp.json bearers fail closed after a reset (cc plan 4)
     s.resolveAllPermissions(); // retire every parked card on every device (fan-out: there may be several)
     s.resolveAllQuestions();
 
@@ -1740,7 +1926,7 @@ export class Supervisor {
       cwd: process.env.HOME ?? this.store.worktreeRoot(),
       source: "existing-dir",
       model: "opus",
-      autonomy: "mostly-autonomous",
+      permissionMode: "bypassPermissions",
       status: "idle",
       createdAt: now(),
       lastActivityAt: now(),
@@ -1843,6 +2029,7 @@ export class Supervisor {
     this.drivers.delete(id);
     this.broker.resolveSession(id, "deny"); // unblock any parked permission
     this.questionBroker.resolveSession(id); // cancel any parked AskUserQuestion
+    this.ccMcpCfg.rotate(id); // fresh bearer for the fresh topic (cc plan 4)
     s.resolveAllPermissions(); // retire every parked card on every device (fan-out: there may be several)
     s.resolveAllQuestions();
     s.data.claudeSessionId = undefined; // the key line: forget the prior topic (no resume next turn)
@@ -1853,8 +2040,10 @@ export class Supervisor {
       type: "assistant.message",
       blocks: [
         {
+          // The label doubles as the reconciler's topic-boundary marker (cc plan 6): prompts
+          // logged before it must never dedupe-absorb the new topic's transcript lines.
           kind: "divider",
-          label: "New topic",
+          label: NEW_TOPIC_DIVIDER_LABEL,
           note: "The earlier conversation is above for reference; Claude no longer has it in context.",
         },
       ],
@@ -1960,9 +2149,6 @@ export class Supervisor {
   /** Per-turn: refresh the shared rate-limit gauge from the real plan windows, broadcast it, and
    *  advise once when the weekly window nears the cap. */
   private onAgentResult(sessionId: string, usage: TurnUsage): void {
-    // A turn that produced a result reached Anthropic with a working credential — break any
-    // consecutive-auth-failure streak so a 401 hours ago can't pair up with one now (§4.6).
-    this.authDegrade.recordTurnSuccess();
     // The agent may have committed, switched/created a branch, or left new changes this turn —
     // refresh git so the worktree panel and session-list badge stay current without a manual
     // "status" press. Local-only and a no-op (no broadcast) when nothing changed. [BE2-5] Async +
@@ -2010,6 +2196,7 @@ export class Supervisor {
         const interrupted = transient.includes(p.data.status);
         if (interrupted) p.data.status = "idle";
         p.data.terminals = undefined; // terminal roster is runtime state — the PTYs died with the old process
+        p.data.attached = undefined; // ditto the attach PTY (cc plan 6) — boot reconcile below heals its turns
         // A restored goal is re-armed PAUSED (design D5): a self-update must never resume an
         // unattended loop. The next user prompt un-pauses it (see prompt()).
         if (p.data.goal) p.data.goal.paused = true;
@@ -2017,6 +2204,11 @@ export class Supervisor {
         // daemon restart; a pre-v4 row has none → wrap mints one (forces one harmless full snapshot).
         const session = this.wrap(p.data, p.lastSeq, p.epoch);
         this.sessions.set(p.data.id, session);
+
+        // Crash-heal (cc plan 6 §4.9): the transcript on disk survived the crash even when the
+        // daemon's stream consumption didn't — backfill BEFORE the interrupted-turn notice so the
+        // healed history reads in order. Synchronous file reads, guarded per session.
+        this.reconcileFromTranscript(p.data.id, "daemon boot");
 
         if (interrupted) {
           session.emit({

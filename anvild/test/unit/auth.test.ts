@@ -2,8 +2,7 @@ import { test, expect } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkAuth } from "../../src/auth/guard";
-import { AccountStore, resolveAuthStatus } from "../../src/auth/accounts";
+import { AccountStore, checkAuth, resolveAuthStatus } from "../../src/auth/accounts";
 
 test("ok with only the OAuth token", () => {
   expect(checkAuth({ CLAUDE_CODE_OAUTH_TOKEN: "tok" }).subscriptionAuthOk).toBe(true);

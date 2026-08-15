@@ -29,8 +29,9 @@ import { $, esc } from "./dom";
 import { toast } from "./dialogs";
 import { newCid, type OutboxItem } from "./outbox";
 import { sendTo, serverOf, serverFetch, wireSessionId, type Server } from "./fleet";
-import { appendOptimisticUser } from "./conversation";
+import { appendOptimisticUser, humanSize } from "./conversation";
 import { isDaemonHandledCommand } from "./sendReconcile";
+import { MAX_ATTACHMENT_BYTES } from "../../protocol";
 import type { AttachmentRef, CommandInfo, Session } from "../../protocol";
 
 // ── Injected dependencies (initComposer) ─────────────────────────────────────────────────────────
@@ -177,6 +178,7 @@ async function sendComposer(): Promise<void> {
   pushHistory(activeId(), text); // remember it for ArrowUp/ArrowDown recall
   historyIdx = -1; // back to composing fresh text
   input.value = "";
+  releaseAttachmentPreviews();
   pendingAttachments.length = 0;
   renderAttachRow();
   autoGrow();
@@ -297,6 +299,11 @@ function attachFiles(files: File[]): void {
   for (const f of files) void uploadAttachment(f);
 }
 
+/** Free the object URLs backing image previews — they pin the File in memory until revoked. */
+function releaseAttachmentPreviews(): void {
+  for (const a of pendingAttachments) if (a.dataUrl?.startsWith("blob:")) URL.revokeObjectURL(a.dataUrl);
+}
+
 function renderAttachRow(): void {
   attachRow.innerHTML = "";
   pendingAttachments.forEach((a, i) => {
@@ -308,7 +315,8 @@ function renderAttachRow(): void {
         : `<span class="msym">description</span><span class="att-name" title="${esc(a.name)}">${esc(a.name)}</span>`;
     chip.innerHTML = `${inner}<button type="button" class="rm" title="Remove">×</button>`;
     chip.querySelector(".rm")!.addEventListener("click", () => {
-      pendingAttachments.splice(i, 1);
+      const [removed] = pendingAttachments.splice(i, 1);
+      if (removed?.dataUrl?.startsWith("blob:")) URL.revokeObjectURL(removed.dataUrl);
       renderAttachRow();
     });
     attachRow.appendChild(chip);
@@ -320,26 +328,34 @@ async function uploadAttachment(file: File): Promise<void> {
     toast("Open a session first");
     return;
   }
+  // Check the size BEFORE reading the file. readAsDataURL + JSON.stringify hold roughly 2-3x the
+  // file in memory at once (rough on a phone, which is the product), and the daemon caps the request
+  // body itself — so an oversized upload used to die as a bodyless 413 behind a bare "Upload failed"
+  // toast that never mentioned size. Say the actual numbers instead.
+  if (file.size > MAX_ATTACHMENT_BYTES) {
+    toast(`${file.name || "That file"} is ${humanSize(file.size)} — the limit is ${humanSize(MAX_ATTACHMENT_BYTES)}`);
+    return;
+  }
   uploadsInFlight++;
   updateSendState();
   try {
-    const dataUrl = await new Promise<string>((resolve, reject) => {
-      const r = new FileReader();
-      r.onload = () => resolve(String(r.result));
-      r.onerror = () => reject(r.error);
-      r.readAsDataURL(file);
-    });
-    const base64 = dataUrl.split(",")[1] ?? "";
+    // Stream the file as the raw request body. The old path read it with readAsDataURL and pasted
+    // the base64 into a JSON string — 2-3x the file resident in memory and 4/3 the bytes on the
+    // wire, which is what made large uploads fail (worst on a phone). The browser streams a File
+    // body, so peak memory no longer scales with the file. Name/type ride in the query string;
+    // mediaType may be empty (Android picker) — the daemon infers it from the filename.
     // wireSessionId: session-scoped REST embeds the id the OWNING daemon knows (#158 — a fleet
     // member's default chat is namespaced client-side).
-    const res = await serverFetch(activeServer().url, `/api/sessions/${wireSessionId(activeId()!)}/attachments`, {
+    const q = new URLSearchParams({ name: file.name || "attachment", mediaType: file.type || "" });
+    const res = await serverFetch(activeServer().url, `/api/sessions/${wireSessionId(activeId()!)}/attachments?${q}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      // mediaType may be empty (Android picker) — the daemon infers it from the filename.
-      body: JSON.stringify({ name: file.name || "attachment", mediaType: file.type || "", dataBase64: base64 }),
+      headers: { "Content-Type": file.type || "application/octet-stream" },
+      body: file,
     });
     if (!res.ok) {
-      toast("Upload failed");
+      // 413 comes from the daemon's body cap, which rejects before the route runs — hence no body to
+      // read for a reason. Name the cause rather than leaving the user guessing.
+      toast(res.status === 413 ? `${file.name || "That file"} is too large to upload (limit ${humanSize(MAX_ATTACHMENT_BYTES)})` : "Upload failed");
       return;
     }
     const { attachment } = (await res.json()) as { attachment: AttachmentRef };
@@ -347,7 +363,9 @@ async function uploadAttachment(file: File): Promise<void> {
       id: attachment.id,
       name: attachment.name,
       kind: attachment.kind,
-      dataUrl: attachment.kind === "image" ? dataUrl : undefined,
+      // An object URL points at the File the browser already holds — no second copy of the bytes in
+      // memory, unlike the data URL this used to reuse. Revoked when the chip goes away.
+      dataUrl: attachment.kind === "image" ? URL.createObjectURL(file) : undefined,
     });
     renderAttachRow();
   } catch {

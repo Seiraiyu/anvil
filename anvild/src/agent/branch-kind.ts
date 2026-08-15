@@ -1,5 +1,4 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
-import { claudeCliOptions } from "./cli";
+import { runCcMicroQuery, type CcSeam } from "../cc/oneshot";
 
 /**
  * The three remote-branch prefixes anvil uses. The local worktree branch stays the bare session
@@ -28,11 +27,16 @@ export function heuristicKind(text: string): BranchKind {
 
 /**
  * Classify a session's goal — drawn from its first user prompt(s) — into a branch prefix. Mirrors
- * `pickIcon`: one-shot Haiku, no tools, §3 OAuth env, hard timeout. The model only has to emit one
- * of three words, so Haiku is plenty; on any failure/timeout/off-list answer we fall back to the
- * keyword heuristic so a prefix is ALWAYS produced (never a bare, unprefixed remote branch).
+ * `pickIcon`: one-shot Haiku, no tools (CLI-direct micro-query), §3 OAuth env, hard timeout. The
+ * model only has to emit one of three words, so Haiku is plenty; on any failure/timeout/off-list
+ * answer we fall back to the keyword heuristic so a prefix is ALWAYS produced (never a bare,
+ * unprefixed remote branch).
  */
-export async function classifyBranchKind(prompts: string, env: Record<string, string>): Promise<BranchKind> {
+export async function classifyBranchKind(
+  prompts: string,
+  env: Record<string, string>,
+  cc?: CcSeam,
+): Promise<BranchKind> {
   const brief = prompts.trim().slice(0, 2000);
   if (!brief) return "feature";
   const prompt =
@@ -42,36 +46,11 @@ export async function classifyBranchKind(prompts: string, env: Record<string, st
     `- feature: anything else — new functionality, refactors, chores, docs, tests, config\n\n` +
     `Opening message(s):\n"""${brief}"""\n\n` +
     `Reply with ONLY one word: bugfix, hotfix, or feature.`;
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), 20_000);
   try {
-    const q = query({
-      prompt,
-      options: {
-        model: "haiku",
-        settingSources: [],
-        allowedTools: [],
-        permissionMode: "bypassPermissions",
-        maxTurns: 1,
-        ...claudeCliOptions(),
-        abortController: ac,
-        env,
-      },
-    });
-    let text = "";
-    for await (const m of q) {
-      if (m.type === "assistant") {
-        for (const block of (m as { message?: { content?: Array<{ type: string; text?: string }> } }).message?.content ?? []) {
-          if (block.type === "text" && block.text) text += block.text;
-        }
-      }
-      if (m.type === "result") break;
-    }
+    const text = await runCcMicroQuery(prompt, { model: "haiku", env, timeoutMs: 20_000, ...cc });
     const word = text.trim().toLowerCase().replace(/[^a-z]/g, "");
     return KIND_SET.has(word) ? (word as BranchKind) : heuristicKind(brief);
   } catch {
     return heuristicKind(brief);
-  } finally {
-    clearTimeout(timer);
   }
 }

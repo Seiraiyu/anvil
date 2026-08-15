@@ -4,7 +4,7 @@
 //      click-outside dismiss. The concrete menu wirings (#btn-prompts, #btn-more, the model pill,
 //      the account chip) stay in main.ts — they read main's prompt library / model / account state.
 //   2. Modals: the modal layer (showModal/closeModal), the new-session / one-off / add-environment /
-//      edit-environment dialogs and their shared picker fragments (autonomy, adversarial, account,
+//      edit-environment dialogs and their shared picker fragments (permission mode, adversarial, account,
 //      server, directory browser), plus the themed confirm/pick dialogs
 //      (confirmDialog / confirmDialogWithOption / pickListDialog).
 //   3. The color-swatch + icon pickers (environment color/icon; the icon picker is also used by
@@ -35,7 +35,7 @@ import { PALETTE, stripeColor } from "./sessionColor";
 import { newCid, type OutboxItem } from "./outbox";
 import type { Server } from "./fleet";
 import type {
-  AutonomyPolicy,
+  PermissionMode,
   DirsListResultEvent,
   Environment,
   PermissionSuggestion,
@@ -277,18 +277,19 @@ function closeModalDom(): void {
 }
 export const closeModal = (): void => dismissOverlay("modal"); // programmatic close → unwind the back-stack
 // New sessions start on Opus; the header model chip switches models mid-session (session.set_model).
-// New sessions default to "bypass" (skip all permission prompts); the autonomy picker dials that back.
+// New sessions default to "bypassPermissions" (skip all prompts — the old default behavior);
+// the permission-mode picker (CC's native modes, protocol delta 1) dials that back.
 const DEFAULT_MODEL = "opus";
-const DEFAULT_AUTONOMY: AutonomyPolicy = "bypass";
-const AUTONOMY_PICKER = `<label>Autonomy<select id="ns-auto">
-  <option value="bypass" data-icon="bolt" selected>Bypass — skip all permission prompts ⚠️</option>
-  <option value="mostly-autonomous" data-icon="auto_mode">Mostly autonomous</option>
-  <option value="allowlist" data-icon="playlist_add_check">Allowlist</option>
-  <option value="prompt-all" data-icon="front_hand">Prompt all</option>
+const DEFAULT_PERMISSION_MODE: PermissionMode = "bypassPermissions";
+const AUTONOMY_PICKER = `<label>Permissions<select id="ns-auto">
+  <option value="bypassPermissions" data-icon="bolt" selected>Bypass — skip all permission prompts ⚠️</option>
+  <option value="default" data-icon="front_hand">Ask — Claude Code's standard prompts</option>
+  <option value="acceptEdits" data-icon="edit">Accept edits — file edits auto-approved</option>
+  <option value="plan" data-icon="map">Plan — read-only planning mode</option>
 </select></label>`;
-/** The chosen autonomy from the open dialog's picker, or the default if it isn't present. */
-const selectedAutonomy = (): AutonomyPolicy =>
-  ((document.getElementById("ns-auto") as HTMLSelectElement | null)?.value as AutonomyPolicy) || DEFAULT_AUTONOMY;
+/** The chosen permission mode from the open dialog's picker, or the default if it isn't present. */
+const selectedPermissionMode = (): PermissionMode =>
+  ((document.getElementById("ns-auto") as HTMLSelectElement | null)?.value as PermissionMode) || DEFAULT_PERMISSION_MODE;
 
 // Opt-in adversarial plan review: when the session plans, competing models critique the plan before
 // it runs (the autopilot panel, in a session). Off by default; needs an OpenRouter key on the server.
@@ -489,7 +490,7 @@ export function showNewSession(): void {
       title: name,
       environmentId: env.id,
       model: DEFAULT_MODEL,
-      autonomy: selectedAutonomy(),
+      permissionMode: selectedPermissionMode(),
       adversarialReview: selectedAdversarial(),
       ...(accountId ? { accountId } : {}),
     };
@@ -522,7 +523,7 @@ function createOfflineSession(cmd: Record<string, unknown> & { type: string }, e
     cwd: env.repoRoot,
     source: env.isRepo ? "fresh-worktree" : "existing-dir",
     model: cmd.model as Session["model"],
-    autonomy: cmd.autonomy as Session["autonomy"],
+    permissionMode: cmd.permissionMode as Session["permissionMode"],
     status: "idle",
     createdAt: now,
     lastActivityAt: now,
@@ -749,7 +750,7 @@ function showOneOff(): void {
       source: "existing-dir",
       cwd: browse.path,
       model: DEFAULT_MODEL,
-      autonomy: selectedAutonomy(),
+      permissionMode: selectedPermissionMode(),
       adversarialReview: selectedAdversarial(),
     });
     closeModal();
@@ -838,6 +839,7 @@ export function showQuestion(requestId: string, questions: Question[]): void {
   // One tap answers when there's a single single-select question (the common "interview me" case).
   const oneTap = questions.length === 1 && !questions[0]!.multiSelect;
   const chosen: string[][] = questions.map(() => []); // button selections, per question
+  const otherFields: HTMLTextAreaElement[] = []; // one-tap free-text boxes, wired to reveal Submit
 
   const send = (): void => {
     const answers = gatherAnswers(card, questions, chosen);
@@ -892,6 +894,7 @@ export function showQuestion(requestId: string, questions: Question[]): void {
     };
     other.addEventListener("input", growOther);
     if (oneTap) {
+      otherFields.push(other);
       // Enter submits the one-tap case; Shift+Enter inserts a newline.
       other.addEventListener("keydown", (e) => {
         if (e.key === "Enter" && !e.shiftKey) {
@@ -916,11 +919,23 @@ export function showQuestion(requestId: string, questions: Question[]): void {
     respondToQuestion({ type: "question.respond", requestId, answers: [], cancelled: true });
   };
   btns.appendChild(skip);
-  if (!oneTap) {
+  {
     const submit = document.createElement("button");
     submit.className = "q-btn submit";
     submit.textContent = questions.length > 1 ? "Submit answers" : "Submit";
     submit.onclick = send;
+    // One-tap questions are answered by tapping an option, so Submit stays out of the way — until
+    // the user types a custom answer. Enter alone used to be the ONLY way to send that text, and
+    // virtual-keyboard Enter is unreliable on Android/PWA (especially mid-IME-composition), which
+    // left a typed answer with no visible way out except Skip.
+    if (oneTap) {
+      submit.hidden = true;
+      for (const other of otherFields) {
+        other.addEventListener("input", () => {
+          submit.hidden = !otherFields.some((f) => f.value.trim());
+        });
+      }
+    }
     btns.appendChild(submit);
   }
   card.appendChild(btns);

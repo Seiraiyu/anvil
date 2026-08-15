@@ -1,6 +1,4 @@
 import { loadConfig } from "./config";
-import { assertSubscriptionAuth } from "./auth/guard";
-import { applyDegradeMarkerAtBoot } from "./auth/degrade";
 import { loadPersistedClaudeToken } from "./auth/store";
 import { AccountStore } from "./auth/accounts";
 import { seedFromEnv } from "./auth/account-mirror";
@@ -9,34 +7,22 @@ import { createServer, VERSION } from "./server/http";
 import { createMarkdownRenderer } from "./render/markdown-pipeline";
 import { installTimestampedConsole, recordExit, recordStart } from "./daemon/lifecycle";
 import { armWatchdog } from "./daemon/updater/arm";
+import { CcInstalls, bridgeCliPath } from "./cc/install";
 
 // Timestamp every log line before anything logs (so restart cadence + event timing are legible in the
 // launchd log). Must run first — earlier bare lines couldn't be correlated in time.
 installTimestampedConsole();
 
 // A token set/reset from the UI (auth.set) is persisted to the launcher's env file. If the launcher
-// didn't export it (dev run), load just that key before the §3 guard so the UI-set token is honoured.
+// didn't export it (dev run), load just that key early so the UI-set token is honoured.
 loadPersistedClaudeToken();
 // The OpenRouter key (adversarial panel) is persisted in the same env file; load it before loadConfig so
 // the panel is enabled on startup when a key was set from the UI. It's a different provider than
 // Anthropic, so it's irrelevant to the §3 guard below.
 loadPersistedOpenRouterKey();
 
-// Config must be resolved BEFORE the guard now: the degrade marker lives in the state dir and is
-// consulted between the token load above and the guard below (headless-join §4.6). Nothing in
-// loadConfig depends on the auth state, so hoisting it is safe.
+// Config is resolved early; nothing in loadConfig depends on auth state.
 const config = loadConfig();
-
-// A prior run auto-degraded (2× auth failure). The launcher re-sources the env file on EVERY start and
-// loadPersistedClaudeToken() reloads that key, so without this the daemon would come back looking
-// authed and burn two more turns rediscovering the dead token — on every reboot (HJ-35).
-const degradeMarker = applyDegradeMarkerAtBoot(config.stateDir);
-if (degradeMarker) {
-  console.warn(
-    `[anvild] ⚠️  starting DEGRADED — a prior run flagged the Claude token as bad (${degradeMarker.reason}` +
-      `${degradeMarker.at ? ` at ${degradeMarker.at}` : ""}). Re-pair this machine, or set a token in Settings → Auth.`,
-  );
-}
 
 // Multi-account (§3.3): an install predating the roster keeps its token only in the launcher env
 // file. Seed it as the "default" account so upgrading is zero-touch. Idempotent — a populated roster
@@ -44,9 +30,12 @@ if (degradeMarker) {
 const accounts = new AccountStore(config.stateDir);
 if (seedFromEnv(accounts)) console.log('[anvild] migrated the existing Claude token into the account roster as "default"');
 
-// arch §3: refuse to start on a §3 VIOLATION (a metered key). A missing/dead token warns and boots
-// degraded instead — that's what lets a fresh headless box exist long enough to be paired (§4.1).
-assertSubscriptionAuth();
+// cc plan 4 ("defer-to-CC auth"): the old §3 boot-refusal guard is gone. Spawned turns still
+// run under the allow-list env (agent/env.ts), which never carries a metered ANTHROPIC_API_KEY.
+
+// Managed CC install → the (still-SDK) driver: make the store's `current` binary the session CLI
+// via the existing ANVIL_CLI_PATH seam (agent/cli.ts). Explicit env always wins (cc plan 2 task 9).
+bridgeCliPath(new CcInstalls(config.ccDir), process.env);
 
 // Log how the PRIOR run ended (deliberate restart vs crash/respawn) and stamp this run `running`, so the
 // next restart is attributable on sight (arch §5 diagnostics).
@@ -59,6 +48,7 @@ const server = ((): ReturnType<typeof createServer> => {
       port: config.port,
       stateDir: config.stateDir,
       clonesDir: config.clonesDir,
+      ccDir: config.ccDir,
       warnFraction: config.warnFraction,
       softStopFraction: config.softStopFraction,
       adversarialModels: config.adversarialModels,

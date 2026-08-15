@@ -35,3 +35,8 @@ test("out-of-range budget fractions are rejected", () => {
   expect(() => loadConfig({ ...base, ANVIL_BUDGET_WARN: "1.5" })).toThrow(/ANVIL_BUDGET_WARN/);
   expect(() => loadConfig({ ...base, ANVIL_BUDGET_SOFTSTOP: "abc" })).toThrow(/ANVIL_BUDGET_SOFTSTOP/);
 });
+
+test("ccDir defaults under ~/.anvil and honors ANVIL_CC_DIR", () => {
+  expect(loadConfig({ ...base }).ccDir).toBe("/home/t/.anvil/cc");
+  expect(loadConfig({ ...base, ANVIL_CC_DIR: "/tmp/x" }).ccDir).toBe("/tmp/x");
+});

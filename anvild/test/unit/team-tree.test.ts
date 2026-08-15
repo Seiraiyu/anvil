@@ -4,7 +4,7 @@ import type { Session } from "@protocol";
 
 const s = (over: Partial<Session>): Session => ({
   id: "x", title: "t", cwd: "/c", source: "fresh-worktree", model: "opus",
-  autonomy: "mostly-autonomous", status: "idle", createdAt: "", lastActivityAt: "",
+  permissionMode: "bypassPermissions", status: "idle", createdAt: "", lastActivityAt: "",
   usage: { inputTokens: 0, outputTokens: 0, turns: 0 }, ...over,
 });
 

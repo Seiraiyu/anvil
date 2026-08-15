@@ -144,6 +144,18 @@ function removeTailSpacer(): void {
   tailSpacer?.remove();
   tailSpacer = null;
 }
+/** A `fallback` ContentBlock: CC output this client/daemon pair doesn't recognize. Collapsed
+ *  <details> so it's inspectable without dominating the pane. */
+function appendFallbackCard(ccType: string, json: string): void {
+  const el = document.createElement("div");
+  el.className = "bubble assistant fallback-card";
+  el.innerHTML =
+    `<details><summary>${icon("help")} Unrecognized Claude Code output <code>${esc(ccType)}</code></summary>` +
+    `<pre class="git-output"></pre></details>`;
+  el.querySelector("pre")!.textContent = json; // textContent — the payload is untrusted JSON
+  conversation.appendChild(el);
+}
+
 function appendTopicDivider(label: string, note?: string): void {
   dropSessionHero();
   const el = document.createElement("div");
@@ -306,9 +318,14 @@ export function commitAssistant(blocks: ContentBlock[], ts?: string): void {
   const mdBlocks = blocks.filter((b): b is Extract<ContentBlock, { kind: "markdown" }> => b.kind === "markdown");
   const toolBlocks = blocks.filter((b): b is Extract<ContentBlock, { kind: "tool_use" }> => b.kind === "tool_use");
   const dividerBlocks = blocks.filter((b): b is Extract<ContentBlock, { kind: "divider" }> => b.kind === "divider");
+  const fallbackBlocks = blocks.filter((b): b is Extract<ContentBlock, { kind: "fallback" }> => b.kind === "fallback");
 
   // Topic dividers are full-width boundaries, not prose bubbles — render (and push-to-top) first.
   for (const d of dividerBlocks) appendTopicDivider(d.label, d.note);
+
+  // Unknown CC output (cc-cli-transport §4.7 delta 3): a collapsed raw-JSON card — visible, never
+  // dropped, but folded so an unrecognized stream type doesn't shout over the conversation.
+  for (const f of fallbackBlocks) appendFallbackCard(f.ccType, f.json);
 
   if (mdBlocks.length) {
     // The model's prose answer is its own clean bubble (separate from the tool churn below).

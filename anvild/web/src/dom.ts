@@ -89,3 +89,67 @@ export function destroyModalSelects(): void {
   for (const t of modalTomSelects) t.destroy();
   modalTomSelects = [];
 }
+
+/** Text-ish inputs are the only ones with a caret worth restoring; number/email/etc. throw on
+ *  setSelectionRange, and checkbox/radio have no user-typed value to preserve at all. */
+const CARET_TYPES = new Set(["text", "search", "url", "tel", "password", ""]);
+/** Tag/type sniffing rather than `instanceof`: the constructors differ across realms (and aren't
+ *  installed by the jsdom test harness), so `instanceof` would quietly report false. */
+function isTextField(el: Element | null): el is HTMLInputElement | HTMLTextAreaElement {
+  if (!el) return false;
+  if (el.tagName === "TEXTAREA") return true;
+  if (el.tagName !== "INPUT") return false;
+  const type = (el as HTMLInputElement).type;
+  return type !== "checkbox" && type !== "radio";
+}
+
+/**
+ * Repaint `host` with `render()` without throwing away what the user is part-way through typing.
+ *
+ * Settings panels repaint on daemon broadcasts (`auth.status`, `auth.accounts`, `todoist.status`),
+ * and those go to EVERY connected device — this is a multi-device product. So an unrelated account
+ * change on another machine used to silently wipe a token someone was mid-paste on this one, because
+ * each handler replaced the panel's whole innerHTML.
+ *
+ * We snapshot the text fields first, then refill only the ones the fresh markup left EMPTY. That
+ * restores unsaved typing while never overwriting a value the server just supplied — the freshly
+ * rendered value always wins when there is one. Focus and caret position come back too.
+ */
+export function repaintPreservingInput(host: HTMLElement, render: () => void): void {
+  const fieldsOf = (root: HTMLElement): (HTMLInputElement | HTMLTextAreaElement)[] =>
+    [...root.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input, textarea")].filter(isTextField);
+  const keyOf = (el: HTMLInputElement | HTMLTextAreaElement, i: number): string => el.id || el.name || `@${i}`;
+
+  const before = fieldsOf(host);
+  const typed = new Map<string, string>();
+  before.forEach((el, i) => {
+    if (el.value) typed.set(keyOf(el, i), el.value);
+  });
+  const active = document.activeElement;
+  const activeIdx = isTextField(active) && host.contains(active) ? before.indexOf(active) : -1;
+  const activeKey = activeIdx >= 0 ? keyOf(before[activeIdx]!, activeIdx) : undefined;
+  let caret: [number, number] | undefined;
+  if (activeIdx >= 0 && isTextField(active) && CARET_TYPES.has(active.tagName === "TEXTAREA" ? "" : active.type)) {
+    try {
+      if (active.selectionStart !== null && active.selectionEnd !== null) caret = [active.selectionStart, active.selectionEnd];
+    } catch {
+      /* some input types refuse selection access — no caret to restore, not an error */
+    }
+  }
+
+  render();
+
+  fieldsOf(host).forEach((el, i) => {
+    const key = keyOf(el, i);
+    const prior = typed.get(key);
+    if (prior && !el.value) el.value = prior; // only refill what the repaint blanked
+    if (key !== activeKey) return;
+    el.focus();
+    if (!caret) return;
+    try {
+      el.setSelectionRange(caret[0], caret[1]);
+    } catch {
+      /* ditto — focus alone is still the right outcome */
+    }
+  });
+}
