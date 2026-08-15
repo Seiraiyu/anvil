@@ -25,6 +25,7 @@ import { buildCommandInfo } from "../agent/skills";
 import { buildFileOffer, deliverablePath, maybeTaildrop } from "../agent/file-offer";
 import { GOAL_TRANSCRIPT_LINES } from "../agent/goal";
 import { resolveCcCommand } from "./install";
+import { CcBootstrapError, ensureCcAvailable } from "./bootstrap";
 import { NdjsonSplitter, parseCCLine, type CCMessage } from "./stream";
 import { spawnInGroup, killGroup, type Group } from "../session/procgroup";
 import type { Session } from "../session/session";
@@ -163,32 +164,38 @@ export class TurnRunner implements SessionDriver {
     this.interrupting = false;
     this.startedWithResume = !!s.data.claudeSessionId;
 
-    // process.env (not the §3 allow-list): ANVIL_CLI_PATH is a daemon-level setting — the plan-2
-    // managed-install bridge writes it there, and agentEnv deliberately strips non-allow-listed keys.
-    const cmd = this.deps.ccCommand ?? resolveCcCommand(process.env);
-    const args = [
-      ...cmd.slice(1),
-      "-p",
-      "--output-format", "stream-json",
-      "--input-format", "stream-json",
-      "--include-partial-messages",
-      "--verbose",
-      "--model", sdkModelId(s.data.model),
-      // The session's own mode, 1:1 with the CLI engine (protocol delta 1); re-read every spawn
-      // so a mid-conversation session.set_permission_mode lands on the next turn.
-      "--permission-mode", s.data.permissionMode ?? this.deps.permissionMode ?? "default",
-      // Fully CC-native config (design §4.3, cc plan 5): user/project settings, CLAUDE.md,
-      // skills, plugins, hooks, and the user's own MCP servers load exactly like terminal CC.
-      // NOTE: with host hooks configured, `init` is NOT necessarily the first stream line
-      // (plan-1 finding) — this runner never assumes it is.
-      ...(this.deps.permissionArgs?.() ?? []),
-      ...(this.systemPromptAppend() ? ["--append-system-prompt", this.systemPromptAppend()] : []),
-      ...(s.data.claudeSessionId ? ["--resume", s.data.claudeSessionId] : []),
-    ];
-
     let sawResult = false;
     const stderrTail: string[] = [];
     try {
+      // First-run bootstrap (design §4.8, cc plan 9 task 1): on a machine that has never had a
+      // CC, download+smoke one before resolving the command vector — otherwise the spawn below
+      // fails with a bare ENOENT. No-op (one boolean) once a CC is known spawnable. Inside the
+      // try so a bootstrap failure surfaces as a normal turn error, not an unhandled rejection.
+      await ensureCcAvailable();
+
+      // process.env (not the §3 allow-list): ANVIL_CLI_PATH is a daemon-level setting — the plan-2
+      // managed-install bridge writes it there, and agentEnv deliberately strips non-allow-listed keys.
+      const cmd = this.deps.ccCommand ?? resolveCcCommand(process.env);
+      const args = [
+        ...cmd.slice(1),
+        "-p",
+        "--output-format", "stream-json",
+        "--input-format", "stream-json",
+        "--include-partial-messages",
+        "--verbose",
+        "--model", sdkModelId(s.data.model),
+        // The session's own mode, 1:1 with the CLI engine (protocol delta 1); re-read every spawn
+        // so a mid-conversation session.set_permission_mode lands on the next turn.
+        "--permission-mode", s.data.permissionMode ?? this.deps.permissionMode ?? "default",
+        // Fully CC-native config (design §4.3, cc plan 5): user/project settings, CLAUDE.md,
+        // skills, plugins, hooks, and the user's own MCP servers load exactly like terminal CC.
+        // NOTE: with host hooks configured, `init` is NOT necessarily the first stream line
+        // (plan-1 finding) — this runner never assumes it is.
+        ...(this.deps.permissionArgs?.() ?? []),
+        ...(this.systemPromptAppend() ? ["--append-system-prompt", this.systemPromptAppend()] : []),
+        ...(s.data.claudeSessionId ? ["--resume", s.data.claudeSessionId] : []),
+      ];
+
       const group = spawnInGroup(cmd[0]!, args, {
         cwd: s.data.cwd,
         env: { ...this.deps.env, TMPDIR: this.deps.env.TMPDIR ?? tmpdir() },
@@ -374,7 +381,10 @@ export class TurnRunner implements SessionDriver {
   private failTurn(e: unknown): void {
     const s = this.deps.session;
     this.state = "error";
-    if (this.startedWithResume && isResumeRejectedError(e)) {
+    // `e instanceof CcBootstrapError` first: a bootstrap failure can carry a CDN error string
+    // ("403 Forbidden"…) that isResumeRejectedError's wording match would misread as a dead
+    // conversation, throwing away a perfectly good claudeSessionId over a download problem.
+    if (this.startedWithResume && !(e instanceof CcBootstrapError) && isResumeRejectedError(e)) {
       // Same fallback as the SDK path (§5.3/Task 23): forget the rejected topic so the NEXT
       // prompt starts fresh instead of retrying the dead resume forever.
       s.data.claudeSessionId = undefined;

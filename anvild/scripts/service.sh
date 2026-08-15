@@ -460,7 +460,7 @@ do_install() {
 
   build_web
 
-  # The daemon imports its dependencies at runtime (the Claude agent SDK, etc.) — without an
+  # The daemon imports its dependencies at runtime (Shiki, markdown-it, etc.) — without an
   # installed node_modules it just crash-loops, which would otherwise surface only as a vague
   # "not healthy" timeout. Catch the missing-deps case up front with an actionable message.
   if [ ! -d "$ANVILD_DIR/node_modules" ]; then
