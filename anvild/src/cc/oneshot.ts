@@ -32,6 +32,7 @@ import type { AccountStore } from "../auth/accounts";
 import { spawnInGroup, killGroup, type Group } from "../session/procgroup";
 import { NdjsonSplitter, parseCCLine, type CCMessage } from "./stream";
 import { resolveCcCommand } from "./install";
+import { ensureCcAvailable } from "./bootstrap";
 
 /** What a one-shot returns. (The successor to agent/query.ts's AgentQueryResult.) */
 export interface AgentQueryResult {
@@ -176,6 +177,9 @@ export async function runCcQuery(prompt: string, opts: CcQueryOpts): Promise<Age
     };
     env.TMPDIR = env.TMPDIR ?? tmpdir();
 
+    // Same first-run guarantee the interactive turns get (cc plan 9 task 1): an autopilot or
+    // pipeline run can be the FIRST thing a fresh install does, so it can't assume a CC exists.
+    await ensureCcAvailable();
     const cmd = opts.ccCommand ?? resolveCcCommand(process.env);
     const args = [
       ...cmd.slice(1),
@@ -228,6 +232,7 @@ export interface CcMicroQueryOpts {
 export async function runCcMicroQuery(prompt: string, opts: CcMicroQueryOpts): Promise<string> {
   const env = { ...opts.env, ...opts.extraEnv };
   env.TMPDIR = env.TMPDIR ?? tmpdir();
+  await ensureCcAvailable(); // cc plan 9 task 1 — see runCcQuery
   const cmd = opts.ccCommand ?? resolveCcCommand(process.env);
   const args = [
     ...cmd.slice(1),
