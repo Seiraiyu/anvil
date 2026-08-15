@@ -27,6 +27,7 @@ import { UpdateStateStore } from "../daemon/update-state";
 import { updateApply, updateCheck, updateStatus, settleAfterBoot, type UpdateApiDeps } from "../daemon/update-api";
 import { isManaged, scheduleRestart, webBundleOk } from "../daemon/selfupdate";
 import { CcInstalls, officialDownloader, resolveLatestVersion } from "../cc/install";
+import { CcBootstrap, registerCcBootstrap } from "../cc/bootstrap";
 import { smokeTest } from "../cc/smoke";
 import { CcUpdater, CC_API_VERSION } from "../cc/update";
 import { FleetRolloutCoordinator, DesiredTargetStore, httpMemberUpdateClient } from "./fleet-rollout";
@@ -191,6 +192,10 @@ export interface ServerOptions {
   /** Test-only injection of a fully-faked CC updater so /api/cc/v1/* is testable without the
    *  network or a real claude binary (same convention as fleetNet/resolveIdentity). */
   ccUpdater?: CcUpdater;
+  /** Set by the real daemon (main.ts) to arm the first-run CC bootstrap (design §4.8): a turn on a
+   *  machine with no managed install and no `claude` on PATH downloads one instead of failing with
+   *  a bare ENOENT. Omitted by tests, so a suite never downloads a CLI. */
+  bootstrapCc?: boolean;
 }
 
 /** The fleet fan-out network surface the rotate/invite paths reach the tailnet through ([BE2-15]). */
@@ -256,15 +261,26 @@ export function createServer(opts: ServerOptions): ServerHandle {
 
   // Managed CC installs (cc-cli-transport design §4.8): versioned store under ccDir, smoke-gated
   // updates, one-tap rollback. Real deps by default; tests inject `opts.ccUpdater`.
+  const ccInstalls = new CcInstalls(opts.ccDir ?? join(opts.stateDir, "cc"));
   const ccUpdater =
     opts.ccUpdater ??
     new CcUpdater({
-      installs: new CcInstalls(opts.ccDir ?? join(opts.stateDir, "cc")),
+      installs: ccInstalls,
       download: officialDownloader(),
       smoke: smokeTest,
       resolveLatest: () => resolveLatestVersion(),
       stateFile: join(opts.stateDir, "cc-update-state.json"),
     });
+
+  // First-run bootstrap (design §4.8, cc plan 9 task 1): arm the turn paths to download+smoke a CC
+  // when the machine has none. Reuses THIS updater, so bootstrap shares its single-writer install
+  // tree, its smoke gate and its pollable phase state — /api/cc/v1/status narrates the download.
+  // Opt-in, so no test suite ever fetches a CLI (the real daemon passes bootstrapCc: true).
+  if (opts.bootstrapCc) {
+    registerCcBootstrap(
+      new CcBootstrap({ installs: ccInstalls, apply: () => ccUpdater.apply(), env: process.env }),
+    );
+  }
 
   // Hub-orchestrated fleet rollout (spec §4.4): pins one SHA, fans it out to reachable members over the
   // frozen API, updates the hub itself last. The desired target persists so a member that was offline is

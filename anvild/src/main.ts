@@ -56,6 +56,7 @@ const server = ((): ReturnType<typeof createServer> => {
       renderer,
       accounts,
       refreshModelLabelsOnBoot: true, // real daemon: pull live model labels shortly after boot
+      bootstrapCc: true, // real daemon: a first turn on a CC-less machine downloads one (§4.8)
     });
   } catch (e) {
     // Bind failed (EADDRINUSE past the retry window, or another listen error). Record it so the next
