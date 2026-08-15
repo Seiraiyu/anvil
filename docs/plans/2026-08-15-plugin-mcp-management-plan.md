@@ -1,7 +1,13 @@
 # Plugin & MCP Management — Implementation Plan
 
 > **SUPERSEDED (2026-08-15)** by [`2026-08-15-claude-code-config-management-design.md`](2026-08-15-claude-code-config-management-design.md)
-> and its forthcoming plan. None of these 22 tasks were executed. The successor's phase table replaces them.
+> and [`2026-08-15-cc-config-management-plan.md`](2026-08-15-cc-config-management-plan.md). None of these 22 tasks were executed.
+>
+> **Do not execute this file directly — but do not ignore it either.** The successor plan CARRIES FORWARD
+> most of these tasks verbatim and cites them by number, because their code is still correct. Execute them
+> only under the successor's numbering, applying its global rename table (`plugins` capability →
+> `cc-config`, `PluginService` → `CcConfigService`, `web/src/plugins.ts` → `web/src/ccconfig.ts`).
+> Tasks 1-7 and 10-22 here are the source text for the successor's carried tasks.
 
 **Goal:** Manage Claude Code plugins and MCP servers from Anvil's UI, per machine, with a diff-based sync between boxes — no terminal anywhere.
 **Architecture:** A thin adapter shells out to Claude Code's non-interactive CLI (`claude plugin … --json`, `claude mcp …`) and parses it; a P7-style domain service owns the domain; REST lands in the existing `/api/cc/v1` route table behind a new `plugins` capability; the web client gets a Settings → Plugins tab with per-server sections and a per-item sync diff.
