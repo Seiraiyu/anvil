@@ -9,22 +9,37 @@ Consolidated 2026-08-01 (improvement-program v2). Companion to [`CLAUDE.md`](../
 
 ---
 
-## 1. §3 — subscription-only billing
+## 1. §3 — billing follows Claude Code (was: subscription-only, enforced at boot)
 
-The daemon refuses to start if `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` are set: those would meter
-per-token billing, defeating the whole point (a subscription-backed `CLAUDE_CODE_OAUTH_TOKEN`). A missing
-OAuth token is NOT fatal — the daemon boots **degraded** (serves UI + pairing) and just can't run a turn.
-- Enforced: `src/auth/guard.ts`. Never route model calls in a way that reintroduces a metered key
-  (see the GLM/OpenRouter path: it uses a per-spawn CHILD env, not the daemon env, precisely to stay
-  clear of this guard).
+**Superseded by the CLI transport (cc plan 4, design §4.3).** The daemon used to refuse to start when
+`ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` were set. `src/auth/guard.ts` and `src/auth/degrade.ts`
+are **deleted**: Anvil spawns the real `claude`, and a daemon that refuses to boot over an env var the
+CLI is entitled to interpret was Anvil overruling the tool it drives. A turn is now billed exactly as
+your terminal's `claude` is billed, and the daemon reports the auth CC declares (from `system/init`)
+without ever blocking on it. A missing OAuth token is still not fatal — the daemon boots **degraded**
+(serves UI + pairing) and fails at turn time.
 
-## 2. Daemon is the permission authority (`settingSources: []`)
+What still holds, and what to preserve:
+- Turns spawn under the **allow-list env** (`src/agent/env.ts`), which forwards only the keys it was
+  handed — never the daemon's ambient environment. The launcher written by `service.sh` also `unset`s
+  both metered variables. Do not widen either without understanding that it re-opens the leak path.
+- The GLM/OpenRouter path still uses a per-spawn CHILD env rather than the daemon env — now for
+  isolation and profile correctness rather than to clear a boot guard.
 
-Sessions are driven with `settingSources: []` (`src/agent/driver.ts`), so no on-disk Claude settings
-(project/user `CLAUDE.md`, `.claude/settings.json`, hooks) are auto-loaded into a daemon-driven session.
-Permission prompts are answered through the daemon's own broker, not a local settings file. Skills/slash
-commands are injected via SDK `plugins` (skills-only wrappers), not `settingSources`, to preserve this.
-- Consequence: this repo's `CLAUDE.md` guides humans/agents editing the repo, NOT the running agent.
+## 2. Claude Code is the permission authority (was: the daemon, via `settingSources: []`)
+
+**Inverted by the CLI transport (cc plan 4, design §4.3–§4.4).** Sessions are no longer driven with
+`settingSources: []`; the spawned CLI loads the user's real config — user/project settings,
+`CLAUDE.md`, skills, plugins, hooks, and their own MCP servers — exactly like terminal Claude Code.
+CC's engine decides every tool call; the daemon is only the *prompt surface*, reached through
+`--permission-prompt-tool` when CC would have prompted a terminal. `agent/danger-list.ts` and the
+autonomy engine in `permissions.ts` are deleted; `autonomy` on the wire became `permissionMode`
+(`default | acceptEdits | plan | bypassPermissions`, protocol §4.7 delta 1).
+- Consequence: this repo's `CLAUDE.md` **is** loaded by daemon-driven sessions running in this repo
+  now, because the CLI loads project config like any other invocation. It is no longer inert.
+- The one surviving daemon-side gate is `agent/pipeline-guard.ts`, scoped to unattended pipeline runs
+  and implemented as a real CC `PreToolUse` hook (design §4.6). Anvil feature hooks are injected the
+  same way — a per-session `--settings` overlay that *adds* hooks and never overrides user config.
 
 ## 3. Tailscale is the security boundary (with narrow identity-gate exceptions)
 

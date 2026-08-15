@@ -63,16 +63,26 @@ bun run start            # run the daemon (src/main.ts)
 CI (`.github/workflows/ci.yml`) gates every PR on `typecheck` + `typecheck:web` + `build:web` +
 `bun test`; the release workflows re-run the same checks before shipping. Keep all four green.
 
-**Auth model (read carefully — the docs used to overstate this).** A missing `CLAUDE_CODE_OAUTH_TOKEN`
-is NOT fatal: the daemon boots **degraded** (it serves the UI + pairing/takeover flow so a headless
-member can be joined into a fleet), it just can't run a turn until a subscription token is present. What
-IS fatal is a **metered key**: the daemon refuses to start if `ANTHROPIC_API_KEY` or
-`ANTHROPIC_AUTH_TOKEN` are set — those outrank the OAuth token and would meter per-token billing (the §3
-guard in `src/auth/guard.ts`). For local dev you'll want a real `CLAUDE_CODE_OAUTH_TOKEN` so turns
-actually run. Tokens now live in the **account roster** (`src/auth/accounts.ts`, multi-account §3); the
-env var is the migration seed + the mirror for the default account, not the only home. The daemon's
-security boundary is Tailscale itself — see [`SECURITY.md`](SECURITY.md) and
-[`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md).
+**Auth model — the daemon defers to Claude Code (cc plan 4, design §4.3).** Nothing about auth is fatal
+at boot any more. A missing `CLAUDE_CODE_OAUTH_TOKEN` leaves the daemon **degraded** (it serves the UI +
+pairing/takeover flow so a headless member can be joined into a fleet) and failing at turn time. A
+**metered key** (`ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`) no longer refuses startup either —
+`src/auth/guard.ts` and `src/auth/degrade.ts` are deleted, because Anvil spawns the real `claude` and the
+CLI is entitled to interpret those variables. A turn bills exactly as your terminal's `claude` bills.
+What still protects you: turns spawn under the **allow-list env** (`src/agent/env.ts`), which forwards
+only the keys it was handed, and the launcher `service.sh` writes `unset`s both. For local dev you want a
+real `CLAUDE_CODE_OAUTH_TOKEN` so turns actually run. Tokens live in the **account roster**
+(`src/auth/accounts.ts`, multi-account §3); the env var is the migration seed + the mirror for the
+default account, not the only home. The daemon's security boundary is Tailscale itself — see
+[`SECURITY.md`](SECURITY.md) and [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md).
+
+**The daemon manages its own Claude Code installs** (`src/cc/`, design §4.8). Versioned store under
+`~/.anvil/cc/versions/<v>` with `current`/`previous` symlinks, smoke-gated updates, one-tap rollback,
+REST at `/api/cc/v1/*` (`CC_API_VERSION`, additive-only like the Update API). Spawn precedence is
+`ANVIL_CLI_PATH` → managed `current` → `claude` on `PATH`; a machine with none of the three bootstraps
+one on its first turn (`src/cc/bootstrap.ts`). Note the consequence for local dev: your daemon and your
+terminal can be running **different CC versions**, and the settings card's "Claude Code: not installed"
+means "not managed by Anvil", not "absent".
 
 **The frozen Update API v1 is load-bearing — do not casually refactor it.** `src/daemon/update-api.ts`
 and `src/daemon/updater/*` (watchdog) implement a STABLE contract (`UPDATE_API_VERSION`) that a hub and a
@@ -89,9 +99,10 @@ changing v1. See `docs/plans/2026-08-01-stable-update-service.md`.
 - **The Android/Apple apps bundle their own copy of the web UI.** `anvild/web/bundle-native.ts` embeds
   the web client into the native shells, so updating `anvild` never updates a phone's UI — the app
   must be re-shipped. A daemon self-update won't reach installed native clients.
-- **The daemon runs sessions with `settingSources: []`** (`src/agent/driver.ts`), so this `CLAUDE.md`
-  is NOT auto-loaded into daemon-driven Claude Code sessions. Conventions here guide humans/agents
-  editing the repo, not the running agent's context.
+- **This `CLAUDE.md` IS loaded into daemon-driven sessions now** — the inverse of the old rule. The
+  CLI transport dropped `settingSources: []`, so a spawned session reads user/project settings,
+  `CLAUDE.md`, skills, plugins, hooks and your own MCP servers exactly like terminal Claude Code
+  (design §4.3). Conventions written here reach the running agent, so keep them true.
 
 ## Merging a session's PR
 

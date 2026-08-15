@@ -34,9 +34,12 @@ finishes — or needs your permission for something risky.
 
 > [!NOTE]
 > **Anvil started life as a Zellij-in-a-WebView app and was rebuilt from the ground up.**
-> The old approach scraped a terminal grid; the current one drives Claude Code through the
-> [Agent SDK](https://docs.claude.com/en/docs/claude-code/sdk) and forwards typed events.
+> The old approach scraped a terminal grid; the current one spawns the real
+> [`claude` CLI](https://docs.claude.com/en/docs/claude-code/cli-reference) per turn in
+> stream-json mode and forwards typed events.
 > See [Why a rebuild?](#why-a-rebuild) and [`docs/plans/anvil-native-architecture.md`](docs/plans/anvil-native-architecture.md).
+> (This fork replaced the Agent SDK transport with the CLI itself — design:
+> [`docs/plans/2026-08-13-cc-cli-transport-design.md`](docs/plans/2026-08-13-cc-cli-transport-design.md).)
 
 ### What you get
 
@@ -47,11 +50,13 @@ finishes — or needs your permission for something risky.
   reconciles to exactly where your laptop left off. No "disconnect the other client" dance.
 - 🌳 **Worktree-per-session** — each task can spin up its own git worktree off a base branch.
   Branch, diffstat, and git lifecycle (commit / push / PR / merge) are first-class.
-- 🛡️ **Mostly-autonomous with a danger-list backstop** — auto-allows ordinary tool use,
-  prompts only on genuinely risky ops (`rm -rf`, force-push, secret access). Per-session
-  autonomy runs from `bypass` through `mostly-autonomous`, `allowlist`, to `prompt-all`;
-  pick a model per session (`opus` · `sonnet` · `haiku` · `fable`). Permission prompts and
-  Claude's own multiple-choice **questions** become native dialogs answerable from any device.
+- 🛡️ **Your Claude Code's permissions, on your phone** — Anvil doesn't second-guess the
+  CLI's permission engine; it *is* the prompt surface for it. Your `~/.claude` settings
+  decide what runs silently, and anything that would have prompted a terminal becomes a
+  native dialog answerable from any device (first answer wins, and it waits indefinitely).
+  Per-session permission mode is Claude Code's own — `default` · `acceptEdits` · `plan` ·
+  `bypassPermissions` — and you pick a model per session (`opus` · `sonnet` · `haiku` ·
+  `fable`). Claude's multiple-choice **questions** ride the same channel.
 - 🤖 **Autopilot** — connect a Todoist project and Anvil bundles your tasks into units of
   work, writes an implementation plan for each (optionally red-teamed by a panel of
   independent models), and can run **overnight on a schedule** — kicking off build sessions
@@ -93,6 +98,10 @@ bun install
 #    manage logins in Settings → Models, and can add more than one (see "Multiple accounts").
 export CLAUDE_CODE_OAUTH_TOKEN="$(claude setup-token)"
 
+#    You don't need to install Claude Code separately: if there's no `claude` on your PATH,
+#    the daemon downloads and smoke-tests one on the first turn and manages it from then on
+#    (Settings → your server → Claude Code). If you already have one, it uses that.
+
 # 3. Run the daemon — serves the web client + WebSocket API on :7701
 bun run start
 #    → open http://localhost:7701
@@ -109,11 +118,18 @@ For an always-on install (macOS LaunchAgent that restarts on crash and at login)
 non-technical, terminal-free setup, see [Running it for real](#running-it-for-real).
 
 > [!IMPORTANT]
-> **Auth & billing is a hard constraint.** Anvil only ever drives Claude through the Agent
-> SDK, authenticated by your subscription's OAuth token. `ANTHROPIC_API_KEY` /
-> `ANTHROPIC_AUTH_TOKEN` **must be unset** — a stray API key silently switches every turn to
-> metered pay-per-token billing, so the daemon **refuses to start** if one is present.
-> Full rationale: [`anvil-native-architecture.md` §3](docs/plans/anvil-native-architecture.md).
+> **Anvil bills exactly the way your terminal's `claude` bills.** It spawns the CLI, so a turn
+> costs whatever that CLI is authenticated as — normally your subscription's OAuth token, drawn
+> from the subscription pool. Anvil never calls the metered Messages API on its own.
+>
+> The flip side: `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` outrank the OAuth token, and a
+> stray one silently switches every turn to metered pay-per-token billing. The daemon **no
+> longer refuses to start** over them (this fork defers config authority to Claude Code), so
+> that check is yours to keep. What Anvil still does: spawn turns under an allow-list env that
+> never forwards a key it wasn't handed, and `unset` both variables in the launcher
+> `service.sh` writes. Full rationale:
+> [`anvil-native-architecture.md` §3](docs/plans/anvil-native-architecture.md) and
+> [`2026-08-13-cc-cli-transport-design.md` §4.3](docs/plans/2026-08-13-cc-cli-transport-design.md).
 
 ---
 
@@ -126,8 +142,8 @@ native shells render them. Everything between them rides your private tailnet.
 flowchart TB
     subgraph dev["🖥️  Your dev machine"]
         direction TB
-        anvild["<b>anvild</b> — the daemon<br/>session supervisor · Agent SDK stream<br/>event log · git/worktree · render pipeline<br/>permissions · budget · push"]
-        cc["Claude Code<br/>(Agent SDK)"]
+        anvild["<b>anvild</b> — the daemon<br/>session supervisor · CC stream-json<br/>event log · git/worktree · render pipeline<br/>permissions · budget · push · CC installs"]
+        cc["claude CLI<br/>(one process per turn)"]
         wt["git worktrees<br/>(one per session)"]
         anvild <-->|"drives"| cc
         anvild <-->|"owns"| wt
@@ -175,8 +191,8 @@ stateDiagram-v2
     idle --> thinking: prompt.send
     thinking --> running_tool: tool_use
     running_tool --> thinking: tool_result
-    thinking --> awaiting_permission: danger-list hit
-    running_tool --> awaiting_permission: danger-list hit
+    thinking --> awaiting_permission: CC would prompt
+    running_tool --> awaiting_permission: CC would prompt
     awaiting_permission --> running_tool: permission.respond (allow)
     awaiting_permission --> thinking: permission.respond (deny)
     thinking --> idle: result (turn complete)
@@ -196,7 +212,7 @@ daemon to replay everything newer (or sends a full snapshot if the client is too
 sequenceDiagram
     participant U as You (any device)
     participant D as anvild
-    participant C as Claude Code (Agent SDK)
+    participant C as claude CLI (stream-json)
 
     U->>D: prompt.send { text }
     D->>C: drive turn
@@ -246,7 +262,7 @@ Full reasoning in [`anvil-native-architecture.md` §8.3](docs/plans/anvil-native
 
 | Component | Path | Stack | What it is |
 |---|---|---|---|
-| **Daemon** | [`anvild/`](anvild/) | TypeScript · Bun | Session supervisor, Agent SDK streaming, event log, git/worktree ops, permissions, budget, render pipeline, push, autopilot + adversarial pipeline, and the Todoist/lapo/OpenRouter integrations. The keystone. |
+| **Daemon** | [`anvild/`](anvild/) | TypeScript · Bun | Session supervisor, CC stream-json transport, managed CC installs, event log, git/worktree ops, permissions, budget, render pipeline, push, autopilot + adversarial pipeline, and the Todoist/lapo/OpenRouter integrations. The keystone. |
 | **Web client** | [`anvild/web/`](anvild/web/) | Vanilla TS | The daily-driver UI and the reusable render surface, served by the daemon at `/`. Also bundled into the native shells. |
 | **Android app** | [`app/`](app/) | Kotlin | A WebView shell hosting the web client over Tailscale + native FCM push, ADB-over-Tailscale, offline app-shell. `com.gte619n.anvil`. |
 | **Apple app** | [`apple/`](apple/) | SwiftUI · WKWebView | macOS-first hybrid shell (same model as Android); iOS + APNs gated on an Apple Developer account. |

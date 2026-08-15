@@ -30,7 +30,13 @@ perimeter can't:
 - **Autonomous agent code-execution.** The unattended dev pipeline runs a third-party model (GLM)
   with Write/Edit/Bash. Every tool call is gated through a danger list that **hard-denies**
   destructive commands, writes escaping the session worktree, and credential/secret paths
-  (`src/agent/pipeline-guard.ts`, `src/agent/danger-list.ts`).
+  (`src/agent/pipeline-guard.ts` — a real Claude Code `PreToolUse` hook, injected through the run's
+  `--settings` overlay). Scope note: this guard covers **unattended pipeline runs only**. Interactive
+  sessions are governed by Claude Code's own permission engine reading your real `~/.claude` settings
+  — the daemon-side danger list and autonomy engine that used to sit on top of them were removed with
+  the CLI transport, deliberately (one policy, not two: see `ARCHITECTURE.md` → *Permissions*).
+  **If you rely on a tool being blocked in an interactive session, express that in your Claude Code
+  settings — Anvil no longer holds a second, independent veto.**
 - **`git clone` argument injection.** Clone URLs are allowlisted to `https://` / `ssh://` / scp-form
   and the `ext::` remote-helper transport is disabled, so a crafted URL can't run a shell command
   (`src/git/ops.ts` `assertSafeCloneUrl`).
@@ -58,8 +64,14 @@ perimeter can't:
 - The Anthropic subscription token, OpenRouter key, and Todoist token live in `~/.config/anvil/env`
   (and per-store files) at `0600`; they are never logged or returned to clients (only masked
   previews are surfaced).
-- The daemon refuses to start if `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` are set in its
-  environment, so a metered key can't leak into agent subprocesses.
+- **Metered keys are no longer a boot-time refusal.** The daemon used to abort startup when
+  `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` were present; that guard was removed with the CLI
+  transport (config authority belongs to Claude Code, which is entitled to interpret those variables).
+  What remains: turns are spawned under an **allow-list env** (`src/agent/env.ts`) that forwards only
+  the keys it was explicitly given, and the launcher `service.sh` writes `unset`s both variables — so
+  a key in your login shell still does not reach an agent subprocess. The residual risk is a key placed
+  deliberately in `~/.config/anvil/env` or in the account roster: Anvil will now honour it, and meter
+  you. Treat "is my Claude Code billing metered?" as a question about your CC auth, not about Anvil.
 - **Multiple Claude accounts.** A hub can hold several labelled subscription tokens in
   `<stateDir>/accounts.json` (`0600`, written atomically). Understand the blast radius before adding
   a second account:
