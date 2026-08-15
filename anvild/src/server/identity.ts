@@ -99,6 +99,9 @@ export const SERVER_CAPABILITIES: readonly string[] = [
   // Managed Claude Code installs (/api/cc/v1/*): versioned store + smoke-gated update + rollback
   // (cc-cli-transport design §4.8). Clients gate the CC version card on this.
   "cc-update",
+  // First-class Loop entity + engine + gate verbs (loops-circuit spec). A client gates every loop.*
+  // send on this so an older daemon (projection-only) degrades to the Phase 0 loops.snapshot panel.
+  "loops",
 ];
 
 /** This daemon's position in the fleet, as `serverHelloEvent` needs it to derive `role`. */

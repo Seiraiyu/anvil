@@ -51,6 +51,9 @@ export interface CcQueryOpts {
    *  pre-roster env-var path. */
   accounts?: AccountStore;
   accountId?: string;
+  /** Fired once per tool the model invokes (Read/Grep/Glob/…), so a caller can stream the run's real
+   *  activity as it happens. `tool` is the CLI tool name; `detail` is a short target (a path/pattern). */
+  onStep?: (step: { tool: string; detail: string }) => void;
   /** Test seam: the CC binary vector (["bun", fake-cc.ts] in tests). Default: ANVIL_CLI_PATH
    *  (the plan-2 managed-install bridge) or PATH's `claude`. */
   ccCommand?: string[];
@@ -96,6 +99,7 @@ async function collect(
   group: Group,
   prompt: string,
   stderrTail: string[],
+  onStep?: (step: { tool: string; detail: string }) => void,
 ): Promise<StreamOutcome & { code: number | null; assistantText: string }> {
   // One user message, then EOF — stdin-close is the -p turn boundary (same as the turn-runner).
   group.child.stdin!.write(`${JSON.stringify(userMessage(prompt))}\n`);
@@ -111,10 +115,12 @@ async function collect(
     if (!msg) return;
     const m = msg as CCMessage;
     if (m.type === "assistant" && Array.isArray(m.message?.content)) {
-      for (const block of m.message.content as { type?: string; name?: string; text?: string; input?: { plan?: unknown } }[]) {
+      for (const block of m.message.content as { type?: string; name?: string; text?: string; input?: Record<string, unknown> }[]) {
         if (block.type === "tool_use" && block.name === "ExitPlanMode") {
           const p = block.input?.plan;
           if (typeof p === "string" && p.trim()) plan = p.trim();
+        } else if (block.type === "tool_use" && block.name && onStep) {
+          onStep({ tool: block.name, detail: toolDetail(block.input) });
         }
         if (block.type === "text" && typeof block.text === "string") assistantText += block.text;
       }
@@ -145,6 +151,13 @@ async function collect(
   if (tail) handle(tail); // a CLI that died mid-line still gets its last words parsed
 
   return { text, plan, sawResult, code, assistantText };
+}
+
+/** Best-effort one-liner for what a tool call is targeting (a path/pattern), for progress streaming. */
+function toolDetail(input?: Record<string, unknown>): string {
+  if (!input) return "";
+  const pick = input.file_path ?? input.path ?? input.pattern ?? input.command ?? input.query ?? input.url;
+  return typeof pick === "string" ? pick : "";
 }
 
 /**
@@ -185,7 +198,7 @@ export async function runCcQuery(prompt: string, opts: CcQueryOpts): Promise<Age
 
     const stderrTail: string[] = [];
     try {
-      const r = await collect(group, prompt, stderrTail);
+      const r = await collect(group, prompt, stderrTail, opts.onStep);
       if (opts.signal?.aborted) throw new Error("one-shot aborted");
       if (!r.sawResult && r.code !== 0) {
         throw new Error(`claude exited ${r.code ?? "by signal"}: ${stderrTail.join("").trim().slice(-800)}`);
