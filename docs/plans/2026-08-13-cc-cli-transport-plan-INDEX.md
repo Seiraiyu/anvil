@@ -16,7 +16,7 @@ Design: [`2026-08-13-cc-cli-transport-design.md`](2026-08-13-cc-cli-transport-de
 
 Supporting docs: [`2026-08-13-cc-transport-sdk-inventory.md`](2026-08-13-cc-transport-sdk-inventory.md) (created by Plan 1 Task 2).
 
-Follow-ups: [`2026-08-15-auto-mode-danger-backstop.md`](2026-08-15-auto-mode-danger-backstop.md) — restores the destructive-action floor that Plan 4 Task 7 removed along with the autonomy engine (`mostly-autonomous` was split, not replaced: unattended runs kept the danger list as a hard deny, interactive sessions kept the auto-allow and lost the floor). Spike-gated.
+Follow-ups: [`2026-08-15-claude-code-config-management-design.md`](2026-08-15-claude-code-config-management-design.md) — one Anvil surface for the whole per-machine `~/.claude` config (plugins, MCP, auto-mode config, memory), with fleet sync. It also closes the floor that Plan 4 Task 7 removed with the autonomy engine, by adopting Claude Code's native `auto` permission mode (shipped 2026-08-14) rather than rebuilding a danger list — superseding the build in [`2026-08-15-auto-mode-danger-backstop.md`](2026-08-15-auto-mode-danger-backstop.md), which is retained for its problem statement only.
 
 **Rules of the road** (bind every plan):
 - A gated plan is re-validated against its inputs before execution; if a gate finding contradicts the plan, the plan doc is amended first (committed), then executed — plans never drift silently from reality.

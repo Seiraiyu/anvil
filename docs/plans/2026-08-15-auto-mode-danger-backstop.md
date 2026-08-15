@@ -1,5 +1,14 @@
 # Auto mode — restoring the danger backstop for interactive sessions
 
+> **BUILD SUPERSEDED (2026-08-15).** Claude Code shipped a native `auto` permission mode on 2026-08-14 —
+> a classifier that blocks irreversible/destructive/exfiltrating actions — which is a strictly better
+> version of the hook-and-regex backstop designed here, and it removes the unverified hook-`ask` spike
+> that gated Task 1. Adoption is folded into
+> [`2026-08-15-claude-code-config-management-design.md`](2026-08-15-claude-code-config-management-design.md) §6.5 (D-5…D-7).
+> **The problem statement below still stands** and is why that section exists: `3084128` split
+> `mostly-autonomous` rather than replacing it, leaving interactive sessions with no destructive-action floor.
+> Do not execute the task table; read §"Why this exists" for the history.
+
 **Goal:** bring back the behavior the old `mostly-autonomous` autonomy policy provided — *run unattended, but stop and ask a human before something genuinely destructive* — without re-introducing the daemon-side permission engine that cc-plan-4 deliberately deleted.
 **Architecture:** a session-scoped `PreToolUse` hook (rendered from the same danger table `agent/pipeline-guard.ts` already owns) returns `allow` for clean calls and `ask` for danger-list hits. CC's engine escalates the `ask` to `--permission-prompt-tool mcp__anvild__approve`, which is already wired — so the existing `PermissionBroker` → `permission.request` card → multi-device resolution path is reused verbatim. Design §4.4, §4.7 delta 1 (this is the follow-up that plan 4 left implicit).
 

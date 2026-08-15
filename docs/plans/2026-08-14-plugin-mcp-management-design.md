@@ -1,5 +1,11 @@
 # Plugin & MCP management from Anvil — design
 
+> **SUPERSEDED (2026-08-15)** by [`2026-08-15-claude-code-config-management-design.md`](2026-08-15-claude-code-config-management-design.md).
+> Scope grew from two domains to four (plugins, MCP, auto-mode config, memory). Nothing here was executed.
+> Two findings below are also **wrong** and corrected in the successor §3: the §10 non-goal claiming
+> worktree-derived memory namespaces (memory is repo-keyed, not cwd-keyed), and the absence of
+> auto-mode config as a managed domain (CC shipped `auto` on 2026-08-14).
+
 **Status:** approved approach, pending spec review
 **Date:** 2026-08-14
 **Depends on:** cc-cli-transport plans 1–8 (merged), plan 9 (platform hardening) runs first
