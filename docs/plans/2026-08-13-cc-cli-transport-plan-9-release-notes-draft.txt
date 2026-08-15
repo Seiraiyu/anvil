@@ -1,0 +1,77 @@
+Anvil 5.0 (build 1)
+2026-08-15 · 951505c · 67 changes since the last build
+
+⚠️ Breaking changes
+• [cc] Delete the Agent SDK — CLI-direct is the only transport (plan 7 task 6)
+• [cc] Autonomy → CC-native permissionMode; delete danger list, autonomy engine, auth guard/degrade
+
+✨ New features
+• [cc] First-run bootstrap — a CC-less machine downloads one on the first turn
+• [attachments] Stream uploads instead of base64-in-JSON; bound the read at turn time
+• [cc] Rewire adversarial plan review onto the CC ExitPlanMode flow (plan 8)
+• [cc] Micro-classifiers ride runCcMicroQuery (plan 7 task 4)
+• [cc] Autopilot planning brain rides runCcQuery (plan 7 task 3)
+• [cc] Retarget pipeline defaultAgent to runCcQuery (plan 7 task 2)
+• [cc] Oneshot runner — runCcQuery/runCcMicroQuery + generated [SEC-H4] guard hook (plan 7 tasks 1+5)
+• [cc] PTY attach — cc.attach/cc.detach, attached gate, claude --resume terminal
+• [cc] Crash-heal — reconcile on daemon boot + abnormal turn end
+• [cc] Transcript reconciler — diff by uuid, backfill through the renderer
+• [cc] Vendored transcript-JSONL types + golden fixture recorder
+• [cc] Enrich bare CC-native skill names from real skill dirs
+• [cc] Role tool servers + settings-overlay hooks + goal Stop hook over HTTP
+• [cc] Daemon-hosted MCP tool host replaces createSdkMcpServer
+• [cc] Interrupt force-denies prompts parked in the approve tool
+• [cc] Permission MCP server + per-session .mcp.json bearer lifecycle
+• [cc] Supervisor rides the turn runner behind ANVIL_CC_DIRECT=1 + fallback card UI
+• [cc] Turn runner — CLI-direct session driver with spawn-per-turn lifecycle
+• [cc] Retarget mapper to CCMessage + never-drop fallback classification
+• [protocol] Fallback ContentBlock arm for unknown CC output
+• [cc] Daemon prefers managed CC install via ANVIL_CLI_PATH bridge
+• [web] CC version card — check/update/rollback with status polling
+• [cc] /api/cc/v1 REST surface + cc-update capability + contract test
+• [cc] Smoke-gated update orchestrator with rollback
+• [cc] Smoke gate for candidate CC binaries
+• [cc] Injectable downloader + official direct-download implementation
+• [cc] Versioned install store with atomic current/previous flip
+• [cc] CcDir config (ANVIL_CC_DIR, default ~/.anvil/cc)
+• [cc] NdjsonSplitter for chunked stream-json stdout
+• [cc] Vendored CCMessage types + never-drop line parser
+
+🐛 Fixes
+• [web] Stop settings broadcasts eating unsaved input; three smaller UI fixes
+• [web] Autopilot re-entrancy guard + honest partial-failure toast when disabling a schedule
+• [attachments] Large uploads failed with an unexplained 'Upload failed'
+• [web] Prompts panel pointed users at the sidebar; prompts live in the header menu
+• [web] README toggle expanded a blank panel after the env list re-rendered
+• [cc] Review fixes — sibling-prefix worktree escape, lost-final-line race, oneshot module cycle, CcSeam dedupe
+• [cc] Review fixes — topic-scoped prompt dedupe, AskUserQuestion echo filter, archive/reset detach
+
+📦 Other changes
+• [plan-9] Size the upstream drift, record the license gap, ship the runbooks
+• Tell the CLI-direct story, and stop promising two deleted controls
+• [plans] Plugin & MCP management design — native screens over the CC CLI
+• [plans] Plan 8 parity checklist + execution notes — live walk green CLI-direct
+• [web] Outbox migration verified against pre-upgrade queued commands (plan 8)
+• [cc] Team-coordinator comments reflect queue-in-TurnRunner reality (plan 8 hot-spot)
+• [plans] Mark plan 7 tasks done + execution notes
+• [plans] Plan 7 gate re-validation amendments — generated guard hook, flag-flip pull-forward
+• [plans] Mark plan 6 tasks done + execution notes
+• [cc] Phase-6 acceptance offline — kill-daemon-mid-turn heal + detach backfill
+• [plans] Mark plan 5 tasks done + execution notes
+• [cc] Grep-clean comment wording in tool-host
+• [plans] Mark plan 4 tasks done + execution notes
+• [cc] Permission-tool spike — Assumption 3 fully confirmed
+• [plans] Mark plan 3 tasks done + execution notes
+• [protocol] Transport-accurate ContextUsage/RateWindow comments
+• [cc] Fake-CC harness — real spawned bun script replaying golden fixtures
+• [plans] Mark plan 2 tasks done + execution notes
+• [cc] Installer contract probe + verified invocation notes
+• [plans] Mark plan 1 tasks done + execution notes
+• [cc] Golden replay pins vendored types to real CLI output
+• [cc] Golden stream-json recordings (cc 2.1.231 (Claude Code))
+• [cc] Golden stream-json recording tool
+• [cc] SDK usage inventory (plan 1 task 2)
+• [web] 30s timeout for WEB2-6 DOM-heavy test on slow machines
+• [plans] CC CLI transport implementation plans (INDEX + phases 1-9)
+• [plans] Record sign-off — anvil hooks OK when implemented as CC hooks
+• [plans] CC CLI transport design — drive sessions via the Claude Code CLI

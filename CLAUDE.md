@@ -40,7 +40,7 @@ while in-place Maps/Sets are `const` exports of their owning module. New dialog 
 
 The wire protocol is the source of truth for daemon↔client contracts:
 `docs/plans/anvil-protocol.ts` (symlinked as `anvild/protocol.ts`, imported as `@protocol`;
-`PROTOCOL_VERSION` is currently **4**). Two contract tests in `anvild/test/contract/` guard it:
+`PROTOCOL_VERSION` is currently **5** — the fork bumped it for the CLI-transport deltas; upstream is still on 4). Two contract tests in `anvild/test/contract/` guard it:
 `protocol-surface.test.ts` pins the version + the set of `type` literals, and `wire-shape.test.ts` pins
 the required fields + types of the critical v4/hello/permission envelopes. Changes are **additive-or-bump**
 — a field rename/retype/drop is breaking; bump `PROTOCOL_VERSION` and update all four clients together.

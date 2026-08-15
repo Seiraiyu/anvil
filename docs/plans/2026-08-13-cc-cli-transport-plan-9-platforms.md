@@ -11,7 +11,7 @@
 | 2 | Linux/WSL2 pass: fresh install → session → phone dialog → CC update → rollback, on this machine | blocked on operator (runbook ready) | no | no |
 | 3 | macOS pass: same script on a Mac; LaunchAgent + `tailscale serve` unchanged from upstream | blocked on operator (runbook ready) | no | no |
 | 4 | Docs: rewrite `docs/ARCHITECTURE.md` "one big idea" section (SDK → CLI-direct), README auth section (defer-to-CC), new CC-updater section; note the CLI-version display for terminal-vs-daemon skew (design §4.8 nuance) | done | yes | no |
-| 5 | Release: version bump per `RELEASING.md`, release notes via `scripts/gen-release-notes.ts`, tag | pending | no | no |
+| 5 | Release: version bump per `RELEASING.md`, release notes via `scripts/gen-release-notes.ts`, ~~tag~~ (this repo has no tag step) | prepped, not cut — 4 blockers | n/a | no |
 | 6 | Housekeeping: upstream license issue outcome recorded; upstream merge dry-run (`git merge upstream/main --no-commit`) to size the drift | done (license needs an owner decision) | yes | no |
 
 Notes:
@@ -108,3 +108,43 @@ file it deleted.
 
 Recommendation: do the merge as its own change *before* the release, not folded into it — the
 conflict set is small enough today that letting it age is the only way it gets hard.
+
+**Task 5 — release: prepared, deliberately not cut.** Scoped to "prep only, stop before tag/push"
+(operator decision, 2026-08-15). Two corrections to the task as written, found while doing it:
+
+*There is no tag.* `RELEASING.md` is explicit — "**Merge to `main`.** That's it — no tag to push."
+A full release fires from `.github/workflows/release.yml` on push to `main`, minting
+`MAJOR.MINOR.<run_number>` and fanning out to Firebase / TestFlight / Sparkle. The plan's "tag" step
+describes a ritual this repo doesn't have.
+
+*`4.1` was not available.* Upstream took it in `edcf46f` ("bump version to 4.1") while we were on
+`4.0`; picking it would have collided at the very next merge. Bumped `VERSION` → **`5.0`** instead,
+which also lines up with this fork's `PROTOCOL_VERSION = 5` (upstream is still on 4) — the transport
+work *is* a major-line change: `autonomy` → `permissionMode` is a breaking wire delta and the Agent
+SDK is gone. Release notes generated and checked in as
+[`…-plan-9-release-notes-draft.txt`](2026-08-13-cc-cli-transport-plan-9-release-notes-draft.txt):
+67 changes, correctly grouped, with both breaking changes surfaced at the top.
+
+**The fork cannot actually ship a release today.** This is the finding, not a formality — four
+blockers, none of them fixable inside this task:
+1. **No signing secrets.** `release.yml` consumes `IOS_DIST_P12_BASE64`, `MAC_DEVELOPER_ID_P12_BASE64`,
+   `SPARKLE_ED_PRIVATE_KEY`, `FIREBASE_SERVICE_ACCOUNT`, … — `gh secret list --repo Seiraiyu/anvil`
+   returns nothing. Every ship job would fail at signing. The secrets live in *upstream's* Google
+   Secret Manager project (`gte619n-anvil`), and `RELEASING.md` §1's `push-secrets.sh` flow would
+   have to be re-run against a fork-owned project with fork-owned Apple/Firebase credentials.
+2. **The Sparkle feed points at upstream.** `apple/make-app.sh` hard-codes
+   `https://gte619n.github.io/anvil/appcast.xml` (overridable via `SPARKLE_FEED_URL`). Shipping a
+   fork build against upstream's appcast would offer *their* updates to *our* installs.
+3. **`main` doesn't have the work.** `cc-cli-transport` is 66 commits ahead of `origin/main` and
+   merged nowhere; the release model triggers on `main`. Merging the branch is the release action.
+4. **The license question (Task 6) is upstream of all of this.** Publishing artifacts widens the
+   exposure of a README that claims MIT over an unlicensed base.
+
+Also noted, not changed: `apple/project.yml` `MARKETING_VERSION` is `2.1.0`, which `RELEASING.md`
+says to keep in MAJOR.MINOR sync by hand. It has been adrift upstream since well before this fork
+(upstream sat at `4.0`/`4.1` with the same `2.1.0`), and it only affects raw Xcode dev builds — so
+correcting it here would be gratuitous divergence against design §6's "keep changes outside
+`src/agent`/`src/cc` minimal and mechanical". Flagging rather than fixing.
+
+Not done, and awaiting a decision: creating a tag, pushing anything to `origin`, opening the PR that
+merges this branch to `main`, or touching the release workflow.
