@@ -4,15 +4,19 @@ Design: [`2026-08-13-cc-cli-transport-design.md`](2026-08-13-cc-cli-transport-de
 
 | # | Plan | Fidelity | Status |
 |---|------|----------|--------|
-| 1 | [Baseline, SDK inventory, vendored types + golden recordings](2026-08-13-cc-cli-transport-plan-1-baseline.md) | complete code | pending |
-| 2 | [Managed CC installs, smoke-gated update + rollback](2026-08-13-cc-cli-transport-plan-2-cc-installs.md) | complete code (1 spike gate) | pending |
-| 3 | [Turn runner + retargeted mapper](2026-08-13-cc-cli-transport-plan-3-turn-runner.md) | gated on Plan 1 recordings | pending |
-| 4 | [Permission MCP server, questions, permissionMode delta](2026-08-13-cc-cli-transport-plan-4-permissions.md) | gated on Plan 3 + spike | pending |
-| 5 | [Tool servers, settings-overlay hooks, skills](2026-08-13-cc-cli-transport-plan-5-tools-hooks.md) | gated on Plans 3–4 | pending |
-| 6 | [Transcript reconciler + PTY attach](2026-08-13-cc-cli-transport-plan-6-reconciler.md) | gated on Plan 3 + transcript fixture | pending |
-| 7 | [One-shot conversion + SDK deletion](2026-08-13-cc-cli-transport-plan-7-oneshot.md) | gated on Plans 3–5 | pending |
-| 8 | [Full-parity sweep + flag flip](2026-08-13-cc-cli-transport-plan-8-parity.md) | gated on Plans 3–7 | pending |
-| 9 | [Platform hardening, docs, release](2026-08-13-cc-cli-transport-plan-9-platforms.md) | gated on Plan 8 | pending |
+| 1 | [Baseline, SDK inventory, vendored types + golden recordings](2026-08-13-cc-cli-transport-plan-1-baseline.md) | complete code | done |
+| 2 | [Managed CC installs, smoke-gated update + rollback](2026-08-13-cc-cli-transport-plan-2-cc-installs.md) | complete code (1 spike gate) | done |
+| 3 | [Turn runner + retargeted mapper](2026-08-13-cc-cli-transport-plan-3-turn-runner.md) | gated on Plan 1 recordings | done |
+| 4 | [Permission MCP server, questions, permissionMode delta](2026-08-13-cc-cli-transport-plan-4-permissions.md) | gated on Plan 3 + spike | done |
+| 5 | [Tool servers, settings-overlay hooks, skills](2026-08-13-cc-cli-transport-plan-5-tools-hooks.md) | gated on Plans 3–4 | done |
+| 6 | [Transcript reconciler + PTY attach](2026-08-13-cc-cli-transport-plan-6-reconciler.md) | gated on Plan 3 + transcript fixture | done |
+| 7 | [One-shot conversion + SDK deletion](2026-08-13-cc-cli-transport-plan-7-oneshot.md) | gated on Plans 3–5 | done |
+| 8 | [Full-parity sweep + flag flip](2026-08-13-cc-cli-transport-plan-8-parity.md) | gated on Plans 3–7 | done |
+| 9 | [Platform hardening, docs, release](2026-08-13-cc-cli-transport-plan-9-platforms.md) | gated on Plan 8 | done |
+
+**All nine plans shipped to `origin/main` on 2026-08-15** via the fork's own PRs #1 (plans 1–8) and #2 (plan 9).
+The status column above was left at `pending` until 2026-08-15 even as each plan's own task table went to `done` —
+the exact drift the rules of the road below forbid. Corrected here.
 
 Supporting docs: [`2026-08-13-cc-transport-sdk-inventory.md`](2026-08-13-cc-transport-sdk-inventory.md) (created by Plan 1 Task 2).
 

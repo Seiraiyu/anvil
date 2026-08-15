@@ -136,15 +136,15 @@ Disk is truth: `~/.claude/projects/<project-slug>/<claudeSessionId>.jsonl` is th
 
 | Phase | Description | Status | Tested | Pushed |
 |-------|-------------|--------|--------|--------|
-| 1 | Repo baseline: fork CI green, SDK usage inventory doc, vendored `CCMessage` types + golden stream-json recordings | pending | no | no |
-| 2 | CC install manager: versioned installs, smoke gate, update/rollback, bootstrap; REST surface + minimal client UI | pending | no | no |
-| 3 | Turn runner + retargeted `map.ts` with fallback card: core sessions CLI-direct (create/converse/interrupt/resume/model-switch) behind a daemon flag | pending | no | no |
-| 4 | Permission MCP server + AskUserQuestion spike; `permissionMode` protocol delta; delete danger list/autonomy/auth guard | pending | no | no |
-| 5 | Anvil tool MCP servers + settings-overlay hooks (goal stop-hook) + skills autocomplete re-source | pending | no | no |
-| 6 | Transcript reconciler + PTY attach handoff | pending | no | no |
-| 7 | One-shot conversion: `cc/oneshot.ts`, autopilot, pipeline (+ guard as CC hook), branch-kind; delete SDK dependency | pending | no | no |
-| 8 | Full-parity sweep: fleet, integrations, web/Android/Apple UI deltas; flag flip to CLI-direct by default | pending | no | no |
-| 9 | Platform hardening: Linux/systemd + macOS/LaunchAgent smoke on real devices; docs; release | pending | no | no |
+| 1 | Repo baseline: fork CI green, SDK usage inventory doc, vendored `CCMessage` types + golden stream-json recordings | done | no | no |
+| 2 | CC install manager: versioned installs, smoke gate, update/rollback, bootstrap; REST surface + minimal client UI | done | no | no |
+| 3 | Turn runner + retargeted `map.ts` with fallback card: core sessions CLI-direct (create/converse/interrupt/resume/model-switch) behind a daemon flag | done | no | no |
+| 4 | Permission MCP server + AskUserQuestion spike; `permissionMode` protocol delta; delete danger list/autonomy/auth guard | done | no | no |
+| 5 | Anvil tool MCP servers + settings-overlay hooks (goal stop-hook) + skills autocomplete re-source | done | no | no |
+| 6 | Transcript reconciler + PTY attach handoff | done | no | no |
+| 7 | One-shot conversion: `cc/oneshot.ts`, autopilot, pipeline (+ guard as CC hook), branch-kind; delete SDK dependency | done | no | no |
+| 8 | Full-parity sweep: fleet, integrations, web/Android/Apple UI deltas; flag flip to CLI-direct by default | done | no | no |
+| 9 | Platform hardening: Linux/systemd + macOS/LaunchAgent smoke on real devices; docs; release | done | no | no |
 
 Each phase's acceptance (functional-test-encodable):
 1. Fork builds + upstream tests pass; `bun test` green; golden recordings replay through vendored types without `unknown` fallbacks on core shapes.
