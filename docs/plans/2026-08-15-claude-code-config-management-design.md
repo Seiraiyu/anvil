@@ -2,11 +2,11 @@
 
 - **Status:** approved approach, pending spec review
 - **Date:** 2026-08-15
-- **Supersedes:** [`2026-08-14-plugin-mcp-management-design.md`](2026-08-14-plugin-mcp-management-design.md) and its
-  22-task plan ([`2026-08-15-plugin-mcp-management-plan.md`](2026-08-15-plugin-mcp-management-plan.md)) — both
-  unexecuted; the scope grew from two domains to four.
-- **Also supersedes:** the build described in
-  [`2026-08-15-auto-mode-danger-backstop.md`](2026-08-15-auto-mode-danger-backstop.md) — see §3.1.
+- **Supersedes (deleted 2026-08-15, unexecuted — see git history if ever needed):**
+  `2026-08-14-plugin-mcp-management-design.md` and its 22-task plan
+  `2026-08-15-plugin-mcp-management-plan.md` (scope grew from two domains to four; their tasks were
+  inlined into this design's plan), and `2026-08-15-auto-mode-danger-backstop.md` (its build was
+  obsolete on arrival — see §3.1; its problem statement is restated there in full).
 - **Extends:** [`2026-08-12-claude-md-reflection.md`](2026-08-12-claude-md-reflection.md) (the first memory slice, merged)
 - **Depends on:** cc-cli-transport plans 1–9 (all merged to `main`)
 
@@ -61,9 +61,15 @@ regex danger list.
 
 **Consequences:**
 
-- The hook-and-regex backstop designed in `2026-08-15-auto-mode-danger-backstop.md` is obsolete before
-  it was built. A regex table is strictly worse than the classifier. That doc's *build* is superseded;
-  its *problem statement* (§"Why this exists") remains accurate and is the reason this matters.
+- A hook-and-regex backstop was designed on 2026-08-15 to rebuild the missing floor by hand; it was
+  obsolete within hours and has been deleted unexecuted. A regex table is strictly worse than the
+  classifier. **Its problem statement is the reason this section exists, and is restated here so
+  nothing is lost with the file:** commit `3084128` replaced Anvil's four-value autonomy dial with
+  CC's permission modes and mapped `mostly-autonomous` onto `bypassPermissions` as "the closest
+  behavioral match". That kept the rarely-prompted half and silently dropped the other half — the
+  danger list survived only inside `pipeline-guard.ts` for unattended one-shots, so interactive
+  sessions were left with no destructive-action floor at all. `mostly-autonomous` was split, not
+  replaced.
 - **The spike that gated that plan is no longer needed.** It hinged on whether a hook-originated `ask`
   reaches `--permission-prompt-tool` under `-p` — unverified and risky. Auto mode needs no hook:
   `permissions.ask` rules produce an **engine-originated** prompt, which cc-plan-4 already confirmed
