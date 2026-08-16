@@ -41,7 +41,7 @@
 | 27 | Web: sync diff UI | **done** | yes | no |
 | 28 | Web DOM tests | **done** | yes | no |
 | 29 | Docs: ARCHITECTURE + SECURITY | **done** | yes | no |
-| 30 | Live pass on hub + one member | **partial**: `permissions.ask` proven (probe-auto-ask.ts); domains pending | partial | no |
+| 30 | Live pass on hub + one member | **partial**: `permissions.ask` proven (probe-auto-ask.ts); four-domain live pass + fleet sync still need an operator | partial | no |
 
 ---
 
@@ -71,6 +71,42 @@ Read these once; they apply to every task.
 
 Every task below carries its complete code. This plan absorbed the tasks of the earlier
 plugin/MCP plan, which has since been deleted — there is nothing else to go and read.
+
+---
+
+### Execution note — full plan run (2026-08-16)
+
+Tasks 1-29 are implemented, tested and committed on `cc-config-management`. Gates green at the end
+of the run: `typecheck` + `typecheck:web` + `build:web` + `bun test` (**1293 pass, 0 fail**).
+
+Deviations from the plan as written, all deliberate:
+
+- **Filenames.** The plan's Task 15 Files list says `ccconfig-service.ts` while every import in it
+  says `plugin-service`. Went with `ccconfig-service.ts` (and `ccconfig-sync.ts`, `ccconfig.ts`,
+  `test/integration/ccconfig-routes.test.ts`) — the service owns four domains, not just plugins.
+- **One deps surface, one lock.** `CcConfigServiceDeps` covers all four domains rather than the
+  plugin/MCP pair the plan sketched, and mutations share ONE lock: auto-mode and memory-settings
+  writes both patch `~/.claude/settings.json`, so a per-domain lock would let them interleave and
+  lose one silently. Reads are deliberately unlocked.
+- **`cc()` consolidation.** Task 2 and Task 3 each introduced a spawn helper; kept one.
+- **Sync covers three domains**, not plugins alone, and memory is excluded by design (§8 Phase B)
+  with a guard test that fails if someone adds it without deciding merge semantics.
+
+Bugs found in the plan's own code, fixed here:
+
+- **`memoryBudget` mis-counted lines.** Stripping `<!-- … -->` without its terminating newline left a
+  phantom blank line, so a 20-line file measured 21 — inflating the count and warning on files that
+  fit, the exact misreport the function exists to prevent. Caught by the plan's own Task 11 test.
+- **`writeMemory`/`deleteMemory` threw synchronously** from a Promise-returning signature (the memory
+  dir is resolved before the lock is taken, on purpose). Now `async`, so it surfaces as a rejection.
+
+CLI assumptions re-verified against **claude 2.1.233** before coding each adapter: `plugin list
+--json|--available`, `install -y/--scope`, `uninstall|enable|disable|update`, `marketplace
+list --json|add|remove|update`, `mcp list` (still no `--json`), `mcp add-json|remove`, `auto-mode
+config|defaults|critique|reset --yes`. All present as the plan assumed.
+
+One pre-existing test needed relaxing: `cc-stream-golden.test.ts` asserted the EXACT listing of
+`test/fixtures/cc/`, which the new cc-config fixtures share. Now a containment check.
 
 ---
 
