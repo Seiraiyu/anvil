@@ -142,3 +142,45 @@ test("a disabled plugin offers Enable, an enabled one offers Disable", () => {
   expect(row(false)).toContain('data-op="enable"');
   expect(row(false)).toContain("disabled"); // the state is visible, not just implied by the button
 });
+
+// ── the sync diff UI (task 27) ──────────────────────────────────────────────────────────────────
+
+type SyncDiffShape = Parameters<typeof cc.syncDiffMarkup>[0];
+
+const emptyDiff = (): SyncDiffShape => ({
+  plugins: { install: [], remove: [], update: [] },
+  mcp: { add: [], remove: [] },
+  autoMode: [],
+});
+
+test("[SAFETY] sync removals render UNCHECKED while installs render checked", () => {
+  const d = emptyDiff();
+  d.plugins.install = [{ id: "new@m", name: "new", selected: true }];
+  d.plugins.remove = [{ id: "local@m", name: "local", selected: false }];
+  const html = cc.syncDiffMarkup(d);
+  const near = (needle: string) => html.slice(html.indexOf(needle), html.indexOf(needle) + 60);
+  // Per-box uniqueness is the point of the feature: a careless "Apply" must not wipe local extras.
+  expect(near('value="new@m"')).toContain("checked");
+  expect(near('value="local@m"')).not.toContain("checked");
+});
+
+test("an identical pair says so rather than rendering an empty dialog", () => {
+  expect(cc.syncDiffMarkup(emptyDiff())).toContain("already match");
+});
+
+test("MCP and auto-mode differences are described, not offered as blind copies", () => {
+  const d = emptyDiff();
+  d.mcp.add = [{ id: "gh", name: "gh" }];
+  d.autoMode = [{ section: "allow", added: ["x"], removed: [] }];
+  const html = cc.syncDiffMarkup(d);
+  // Transports are machine-specific and rules are prose — neither is safe to copy without a human.
+  expect(html).toContain("machine-specific");
+  expect(html).toContain("not safe to copy blind");
+  expect(html).not.toContain('data-sync="mcp"');
+});
+
+test("[SEC] sync rows escape plugin ids", () => {
+  const d = emptyDiff();
+  d.plugins.install = [{ id: '"><script>alert(1)</script>', name: "x", selected: true }];
+  expect(cc.syncDiffMarkup(d)).not.toContain("<script>");
+});

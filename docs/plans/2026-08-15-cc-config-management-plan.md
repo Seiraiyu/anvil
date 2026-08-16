@@ -12,35 +12,35 @@
 
 | Task | Description | Status | Tested | Pushed |
 |------|-------------|--------|--------|--------|
-| 1 | Plugin list fixtures | pending | no | no |
-| 2 | `src/cc/plugins.ts` types + `parsePluginList` | pending | no | no |
-| 3 | Plugin read commands | pending | no | no |
-| 4 | Plugin write commands | pending | no | no |
-| 5 | Marketplace commands | pending | no | no |
-| 6 | Tolerant `claude mcp list` parser | pending | no | no |
-| 7 | MCP commands | pending | no | no |
-| 8 | Auto-mode fixtures | pending | no | no |
-| 9 | `src/cc/automode.ts` read + `$defaults` splice | pending | no | no |
-| 10 | Auto-mode write + critique + reset | pending | no | no |
-| 11 | `src/cc/memory.ts` list/read + path confinement + budget | pending | no | no |
-| 12 | Memory write/delete + stale-write rejection | pending | no | no |
-| 13 | Memory settings (`autoMemoryEnabled`, `autoMemoryDirectory`) | pending | no | no |
-| 14 | `cc-config` capability + contract test | pending | no | no |
-| 15 | `CcConfigService` + Deps guard test | pending | no | no |
-| 16 | Wire the service into the server | pending | no | no |
-| 17 | REST read routes (4 domains) | pending | no | no |
-| 18 | REST write routes + job progress | pending | no | no |
+| 1 | Plugin list fixtures | **done** | yes | no |
+| 2 | `src/cc/plugins.ts` types + `parsePluginList` | **done** | yes | no |
+| 3 | Plugin read commands | **done** | yes | no |
+| 4 | Plugin write commands | **done** | yes | no |
+| 5 | Marketplace commands | **done** | yes | no |
+| 6 | Tolerant `claude mcp list` parser | **done** | yes | no |
+| 7 | MCP commands | **done** | yes | no |
+| 8 | Auto-mode fixtures | **done** | yes | no |
+| 9 | `src/cc/automode.ts` read + `$defaults` splice | **done** | yes | no |
+| 10 | Auto-mode write + critique + reset | **done** | yes | no |
+| 11 | `src/cc/memory.ts` list/read + path confinement + budget | **done** | yes | no |
+| 12 | Memory write/delete + stale-write rejection | **done** | yes | no |
+| 13 | Memory settings (`autoMemoryEnabled`, `autoMemoryDirectory`) | **done** | yes | no |
+| 14 | `cc-config` capability + contract test | **done** | yes | no |
+| 15 | `CcConfigService` + Deps guard test | **done** | yes | no |
+| 16 | Wire the service into the server | **done** | yes | no |
+| 17 | REST read routes (4 domains) | **done** | yes | no |
+| 18 | REST write routes + job progress | **done** | yes | no |
 | 19 | Protocol: `PermissionMode` gains `auto`/`dontAsk` + golden regen | **done** | yes | no |
 | 20 | `auto` becomes the new-session default | **done** (widened, see note) | yes | no |
-| 21 | Sync diff computation (plugins, MCP, autoMode) | pending | no | no |
-| 22 | Sync REST endpoint | pending | no | no |
-| 23 | Web: `ccconfig.ts` seam + Settings section shell | pending | no | no |
-| 24 | Web: plugin + MCP rendering and actions | pending | no | no |
-| 25 | Web: auto-mode editor with `$defaults` guard | pending | no | no |
-| 26 | Web: memory browser/editor | pending | no | no |
-| 27 | Web: sync diff UI | pending | no | no |
-| 28 | Web DOM tests | pending | no | no |
-| 29 | Docs: ARCHITECTURE + SECURITY | pending | no | no |
+| 21 | Sync diff computation (plugins, MCP, autoMode) | **done** | yes | no |
+| 22 | Sync REST endpoint | **done** | yes | no |
+| 23 | Web: `ccconfig.ts` seam + Settings section shell | **done** | yes | no |
+| 24 | Web: plugin + MCP rendering and actions | **done** | yes | no |
+| 25 | Web: auto-mode editor with `$defaults` guard | **done** | yes | no |
+| 26 | Web: memory browser/editor | **done** | yes | no |
+| 27 | Web: sync diff UI | **done** | yes | no |
+| 28 | Web DOM tests | **done** | yes | no |
+| 29 | Docs: ARCHITECTURE + SECURITY | **done** | yes | no |
 | 30 | Live pass on hub + one member | **partial**: `permissions.ask` proven (probe-auto-ask.ts); domains pending | partial | no |
 
 ---
