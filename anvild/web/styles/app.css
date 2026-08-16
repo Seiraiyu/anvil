@@ -1284,3 +1284,27 @@ html.is-android #conversation .att-img { -webkit-touch-callout: none; -webkit-us
    static native bundle the fill no-ops and the tilt still carries the state. */
 #panel-pin .msym { transform: rotate(45deg); transition: transform 0.12s ease; }
 #panel-pin.active .msym { transform: none; font-variation-settings: "FILL" 1; color: var(--accent); }
+
+/* Settings → Claude Code (cc-config): per-server cards for plugins, MCP, memory + the auto-mode
+   editor. Rows are name-on-the-left / actions-on-the-right, matching the Prompts and Environments
+   cards above rather than inventing a third layout. */
+.cfg-card { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; background: var(--panel); }
+.cfg-card h4 { margin: 0; font-size: 14px; }
+.cfg-block { margin-top: 10px; }
+.cfg-block h5 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.cfg-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-top: 1px solid var(--border); }
+.cfg-row:first-child { border-top: 0; }
+.cfg-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.cfg-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.cfg-card .small { font-size: 12px; }
+.cfg-card .muted { color: var(--muted); }
+.cfg-card .ok { color: #21ba45; }
+.cfg-card .warn { color: var(--danger); }
+
+/* The auto-mode editor. `.am-warn` is the $defaults guard: dropping the sentinel silently discards
+   Claude Code's built-in rules for that section, so the warning is loud and always adjacent. */
+.am-section { margin-bottom: 14px; }
+.am-label { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+.am-text { width: 100%; box-sizing: border-box; font-family: ui-monospace, monospace; font-size: 12px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); }
+.am-warn { margin: 6px 0 0; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--danger); color: var(--danger); font-size: 12px; }
+.am-warn.hidden { display: none; }
