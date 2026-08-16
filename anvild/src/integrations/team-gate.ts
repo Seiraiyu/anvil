@@ -1,7 +1,10 @@
 import type { PermissionMode } from "@protocol";
-/** The team-plan gate rides the session's permission mode: only `bypassPermissions` auto-approves. */
+/** The team-plan gate rides the session's permission mode: the unattended modes auto-approve.
+ *  `auto` joins `bypassPermissions` here because D-6 made it the new-session default — without it,
+ *  every lead would start parking an approval card instead of spawning. Spawning a member is not a
+ *  destructive action, which is the only thing auto mode's classifier is there to stop. */
 export function shouldAutoApprove(mode: PermissionMode): boolean {
-  return mode === "bypassPermissions";
+  return mode === "bypassPermissions" || mode === "auto";
 }
 
 /** Pause NEW member spawns while the subscription budget is in its warn zone (running members finish),

@@ -295,7 +295,7 @@ export interface Session {
   worktree?: Worktree; // present when source === "fresh-worktree"
   git?: GitStatus;
   model: Model; // default "opus" (§3)
-  permissionMode: PermissionMode; // default "bypassPermissions" (matches the old mostly-autonomous behavior)
+  permissionMode: PermissionMode; // default "auto" (classifier-gated; see cc-config design D-6)
   adversarialReview?: boolean; // opt-in: when planning, competing OpenRouter models critique the plan
   // before execution (the autopilot adversarial panel, brought to interactive sessions). Advisory only;
   // needs an OpenRouter key. Default off. (§6.6 / adversarial panel)
@@ -1392,7 +1392,7 @@ export interface SessionCreateCmd extends Envelope, Correlated {
   title?: string;
   environmentId?: string; // the Environment this came from (for grouping/labeling)
   model?: Model; // defaults to "opus"
-  permissionMode?: PermissionMode; // defaults to "bypassPermissions" (the old mostly-autonomous behavior)
+  permissionMode?: PermissionMode; // defaults to "auto" (unattended, but destructive actions blocked)
   adversarialReview?: boolean; // defaults to false (adversarial plan review; needs an OpenRouter key)
   // ── Teams: create this session as a team lead (see docs/plans/anvil-team-support.md). A lead is an
   //    ordinary session that also gets the lead orchestration MCP tools + an integration/concurrency
@@ -1692,7 +1692,7 @@ export interface AutopilotStartCmd extends Envelope, Correlated {
   type: "autopilot.start"; // create a worktree session seeded with the plan and start it → autopilot.started
   workUnitId: string;
   model?: Model; // defaults to "opus"
-  permissionMode?: PermissionMode; // defaults to "bypassPermissions" (auto-start working without permission stalls)
+  permissionMode?: PermissionMode; // defaults to "auto" (auto-start working, no permission stalls, floor intact)
 }
 export interface AutopilotPipelineStartCmd extends Envelope, Correlated {
   type: "autopilot.pipeline.start"; // run the autonomous dev pipeline (§4) for a unit → autopilot.pipeline.result

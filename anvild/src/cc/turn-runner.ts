@@ -184,9 +184,13 @@ export class TurnRunner implements SessionDriver {
         "--include-partial-messages",
         "--verbose",
         "--model", sdkModelId(s.data.model),
-        // The session's own mode, 1:1 with the CLI engine (protocol delta 1); re-read every spawn
-        // so a mid-conversation session.set_permission_mode lands on the next turn.
-        "--permission-mode", s.data.permissionMode ?? this.deps.permissionMode ?? "default",
+        // The session's own mode, 1:1 with the CLI engine (protocol delta 1); re-read every spawn so a
+        // mid-conversation session.set_permission_mode lands on the next turn. Fallback is `auto`:
+        // `claude -p` does NOT inherit CC's built-in auto default (docs are explicit that -p starts in
+        // `default`), so an unset mode must be named explicitly or the session loses the classifier.
+        // In practice only pre-D-6 session records reach this branch — the supervisor stamps a
+        // concrete mode at create time — but they must land on the floor too, not below it.
+        "--permission-mode", s.data.permissionMode ?? this.deps.permissionMode ?? "auto",
         // Fully CC-native config (design §4.3, cc plan 5): user/project settings, CLAUDE.md,
         // skills, plugins, hooks, and the user's own MCP servers load exactly like terminal CC.
         // NOTE: with host hooks configured, `init` is NOT necessarily the first stream line

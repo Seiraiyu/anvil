@@ -44,7 +44,7 @@ test("pre-upgrade queued session.create is migrated on load (autonomy → permis
   };
   const q = new OutboxQueue(fakeStorage(JSON.stringify([legacy])), "anvil.outbox");
   const m = q.list()[0]!;
-  expect(m.cmd.permissionMode).toBe("bypassPermissions");
+  expect(m.cmd.permissionMode).toBe("auto"); // D-6 retargeted `mostly-autonomous` off bypassPermissions
   expect("autonomy" in m.cmd).toBe(false);
   // The reconcile envelope survives the rewrite.
   expect(m.tempId).toBe("tmp_1");

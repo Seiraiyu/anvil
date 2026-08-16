@@ -277,15 +277,20 @@ function closeModalDom(): void {
 }
 export const closeModal = (): void => dismissOverlay("modal"); // programmatic close → unwind the back-stack
 // New sessions start on Opus; the header model chip switches models mid-session (session.set_model).
-// New sessions default to "bypassPermissions" (skip all prompts — the old default behavior);
-// the permission-mode picker (CC's native modes, protocol delta 1) dials that back.
+// New sessions default to "auto" — CC's classifier blocks irreversible/destructive actions while
+// keeping the session unattended. Replaces the old "bypassPermissions" default, which had no floor
+// (cc-config design D-6). The picker (CC's native modes, protocol delta 1) dials it either way.
+// Keep the `selected` option and DEFAULT_PERMISSION_MODE in lockstep — an untouched picker submits
+// the marked option, so a mismatch quietly creates sessions in a mode the code claims is not default.
 const DEFAULT_MODEL = "opus";
-const DEFAULT_PERMISSION_MODE: PermissionMode = "bypassPermissions";
+const DEFAULT_PERMISSION_MODE: PermissionMode = "auto";
 const AUTONOMY_PICKER = `<label>Permissions<select id="ns-auto">
-  <option value="bypassPermissions" data-icon="bolt" selected>Bypass — skip all permission prompts ⚠️</option>
-  <option value="default" data-icon="front_hand">Ask — Claude Code's standard prompts</option>
+  <option value="auto" data-icon="shield" selected>Auto — runs freely; destructive actions blocked</option>
+  <option value="default" data-icon="front_hand">Manual — Claude Code's standard prompts</option>
   <option value="acceptEdits" data-icon="edit">Accept edits — file edits auto-approved</option>
   <option value="plan" data-icon="map">Plan — read-only planning mode</option>
+  <option value="dontAsk" data-icon="lock">Don't ask — only pre-approved tools (CI)</option>
+  <option value="bypassPermissions" data-icon="bolt">Bypass — skip all permission prompts ⚠️</option>
 </select></label>`;
 /** The chosen permission mode from the open dialog's picker, or the default if it isn't present. */
 const selectedPermissionMode = (): PermissionMode =>

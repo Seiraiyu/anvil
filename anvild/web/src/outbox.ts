@@ -73,7 +73,10 @@ export class OutboxQueue {
 // in place: session.create's `autonomy` key, and the session.set_autonomy command itself.
 const LEGACY_AUTONOMY_MAP: Record<string, string> = {
   bypass: "bypassPermissions",
-  "mostly-autonomous": "bypassPermissions", // the closest behavioral match (rarely prompted)
+  // `auto` is what `mostly-autonomous` always meant: rarely prompted, but with a floor under
+  // destructive actions. 3084128 had to settle for `bypassPermissions` as "the closest behavioral
+  // match" because CC had no classifier mode yet; D-6 gives the mapping its real target.
+  "mostly-autonomous": "auto",
   allowlist: "default",
   "prompt-all": "default",
 };

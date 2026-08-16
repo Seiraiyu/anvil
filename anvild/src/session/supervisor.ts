@@ -1019,7 +1019,10 @@ export class Supervisor {
       worktree,
       git: await gitStatusAsync(cwd),
       model: cmd.model ?? "opus",
-      permissionMode: cmd.permissionMode ?? "bypassPermissions",
+      // `auto` is the new-session default (cc-config design D-6): CC's classifier runs the session
+      // unattended but blocks irreversible/destructive/exfiltrating actions. Replaces the old
+      // `bypassPermissions` default, which had no floor at all. A client that names a mode still wins.
+      permissionMode: cmd.permissionMode ?? "auto",
       adversarialReview: cmd.adversarialReview ?? false,
       status: "idle",
       createdAt: now(),
@@ -1982,7 +1985,7 @@ export class Supervisor {
       cwd: process.env.HOME ?? this.store.worktreeRoot(),
       source: "existing-dir",
       model: "opus",
-      permissionMode: "bypassPermissions",
+      permissionMode: "auto", // the new-session default (D-6); this one runs in $HOME, so the floor matters most
       status: "idle",
       createdAt: now(),
       lastActivityAt: now(),
