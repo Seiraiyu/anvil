@@ -120,14 +120,28 @@ export const isModel = (m: unknown): m is Model => MODELS.some((x) => x.id === m
  * Claude Code's native permission modes (cc-cli-transport §4.7 delta 1 — replaces the old
  * autonomy dial). Maps 1:1 to the CLI's `--permission-mode`; the CLI's own engine decides
  * which calls prompt, and prompts route to the daemon's approve tool (design §4.4).
+ *
+ * `auto`/`dontAsk` are additive members (cc-config design §6.5) — the union is a string field on
+ * envelopes that already exist, so PROTOCOL_VERSION is unchanged. Note the CLI now spells `default`
+ * as `manual` in its own `--permission-mode` choices list; it still accepts `default` as an alias,
+ * and the wire keeps `default` so old clients and stored sessions stay valid.
  */
 export type PermissionMode =
-  | "default" // CC's standard engine: safe tools auto-allowed, everything else prompts
+  | "default" // Manual: CC's standard engine — safe tools auto-allowed, everything else prompts
   | "acceptEdits" // file edits auto-accepted; other prompt-worthy tools still prompt
   | "plan" // read-only planning: edits/writes blocked
+  | "auto" // classifier-gated: runs everything, blocks irreversible/destructive/exfiltrating actions
+  | "dontAsk" // auto-DENIES anything that would prompt; only pre-approved tools run (CI)
   | "bypassPermissions"; // DANGER: never prompt — allow every tool
 
-export const PERMISSION_MODES: readonly PermissionMode[] = ["default", "acceptEdits", "plan", "bypassPermissions"];
+export const PERMISSION_MODES: readonly PermissionMode[] = [
+  "default",
+  "acceptEdits",
+  "plan",
+  "auto",
+  "dontAsk",
+  "bypassPermissions",
+];
 export const isPermissionMode = (m: unknown): m is PermissionMode => PERMISSION_MODES.includes(m as PermissionMode);
 
 export type SessionSource = "existing-dir" | "fresh-worktree";
