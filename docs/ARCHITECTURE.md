@@ -115,7 +115,7 @@ owns the lifecycle explicitly — there are no Zellij sockets or husks to reason
 |---|---|
 | `source` | `existing-dir` (attach to a directory as-is) or `fresh-worktree` (spin up a git worktree off a base branch) |
 | `model` | `opus` (default) · `sonnet` · `haiku` · `fable`, per-session override, switchable mid-conversation |
-| `permissionMode` | Claude Code's own modes, 1:1: `default` · `acceptEdits` · `plan` · `bypassPermissions`. Switchable mid-conversation; re-read on every spawn |
+| `permissionMode` | Claude Code's own modes, 1:1: `auto` (default) · `default` · `acceptEdits` · `plan` · `dontAsk` · `bypassPermissions`. Switchable mid-conversation; re-read on every spawn |
 | `status` | `idle` · `thinking` · `running_tool` · `awaiting_permission` · `awaiting_question` · `error` · `exited` |
 | `claudeSessionId` | Claude Code's own `--resume` id, captured for resume |
 
@@ -201,7 +201,7 @@ call the daemon's MCP `approve` tool, wired in per spawn with `--permission-prom
 ```mermaid
 flowchart TD
     tool["tool_use"] --> engine{"CC permission engine<br/>(your real settings<br/>+ --permission-mode)"}
-    engine -->|"allowed by settings,<br/>or acceptEdits/bypassPermissions"| allow["✅ runs — no dialog"]
+    engine -->|"allowed by settings, classified<br/>safe in auto, or acceptEdits/bypass"| allow["✅ runs — no dialog"]
     engine -->|"would prompt"| approve["MCP approve tool<br/>(localhost, per-session bearer)"]
     approve --> ask["⏸️ permission.request<br/>+ 📲 push · block session"]
     ask --> respond["permission.respond<br/>(from any device — first wins)"]
@@ -212,9 +212,17 @@ flowchart TD
     class ask,allow stop;
 ```
 
-The session's `permissionMode` is CC's own, 1:1 — `default` · `acceptEdits` · `plan` ·
-`bypassPermissions` — re-read on every spawn, so switching it mid-conversation lands on the
-next turn. `AskUserQuestion` rides the same channel: the approve tool recognises the tool
+The session's `permissionMode` is CC's own, 1:1 — `auto` · `default` · `acceptEdits` · `plan` ·
+`dontAsk` · `bypassPermissions` — re-read on every spawn, so switching it mid-conversation lands on
+the next turn. **New sessions default to `auto`**: CC's classifier runs the session unattended but
+blocks irreversible, destructive and exfiltrating actions. That replaced a `bypassPermissions`
+default, which was unattended with no floor at all.
+
+**The human-checkpoint recipe.** `permissions.ask` rules are evaluated *before* the classifier and
+always prompt — and those prompts are engine-originated, so they arrive at the approve tool and
+become a `permission.request` card on every device. Put `Bash(git push *)` in
+`permissions.ask` and everything runs unattended except a push, which waits for a tap on your phone.
+(Verified end-to-end by [`probe-auto-ask.ts`](../anvild/test/tools/probe-auto-ask.ts).) `AskUserQuestion` rides the same channel: the approve tool recognises the tool
 name and renders the existing question card, returning the chosen answers as `updatedInput`.
 Prompts **hold indefinitely** — no timeout-deny, because answering from your pocket an hour
 later is the product. `session.reset` force-resolves anything wedged.
@@ -310,6 +318,33 @@ flowchart LR
 > the card; update your terminal's the way you always have.
 
 ---
+
+## Managing `~/.claude` from the app
+
+Everything Claude Code reads out of `~/.claude` on a machine is editable from Anvil's
+**Settings → Claude Code** tab, per server, with no terminal. `CcConfigService`
+(`anvild/src/session/ccconfig-service.ts`) is the P7 domain service that owns it; REST lives at
+`/api/cc/v1/*` behind the `cc-config` capability.
+
+| Domain | Source of truth | How Anvil touches it |
+|---|---|---|
+| **Plugins** | `claude plugin list --json` | install / uninstall / enable / disable / update, plus marketplace add/remove/update — all through the CLI, never by editing the plugin cache |
+| **MCP servers** | `claude mcp list` (no `--json` — the one place we parse human output) | `mcp add-json` / `mcp remove`; the config travels as ONE JSON argv entry, never shell words |
+| **Auto mode** | `claude auto-mode config` (effective merge) | the `autoMode` block in `~/.claude/settings.json`, plus `critique` and `reset` |
+| **Memory** | `init.memory_paths.auto` from any turn | list / read / write / delete inside that directory, with a `MEMORY.md` budget warning |
+
+Three things are worth knowing before you use it:
+
+- **Changes land on the next turn, and nothing restarts.** Anvil spawns a fresh `claude` per turn, so
+  a plugin you install is present the next time that session runs. That turn's `init` republishes the
+  slash-command list, so new commands appear in the composer's `/` menu on their own.
+- **Anvil never derives Claude Code's paths.** The memory directory is *reported* by CC on every
+  `init`; Anvil reads it. Before any turn has run on a machine, the memory browser says so rather
+  than guessing a project slug that would break the moment CC changed its mapping.
+- **Sync is a diff you approve, not a push.** A hub can diff its plugins / MCP servers / auto-mode
+  config against another box and apply only the rows you tick. Removals are never pre-ticked, because
+  per-box uniqueness is the point. **Memory is deliberately not synced** — it is per-repo prose
+  written by the agent on both machines, so merging it has no defined meaning.
 
 ## Environments and the concierge
 
