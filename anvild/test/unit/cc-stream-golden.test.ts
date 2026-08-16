@@ -20,7 +20,14 @@ function replay(name: string): CCMessage[] {
 }
 
 test("fixtures exist (record with test/tools/record-cc-stream.ts)", () => {
-  expect(readdirSync(FIXTURES).sort()).toEqual(["basic.ndjson", "cc-version.txt", "resume.ndjson", "tool.ndjson"]);
+  // CONTAINMENT, not equality: this directory is shared with the cc-config fixtures
+  // (plugin-list*.json, automode-*.json). The check is that every recording this file replays is
+  // present — asserting the exact listing made an unrelated fixture addition fail here, which
+  // pointed at the wrong file and said nothing about the stream goldens.
+  const present = new Set(readdirSync(FIXTURES));
+  for (const f of ["basic.ndjson", "cc-version.txt", "resume.ndjson", "tool.ndjson"]) {
+    expect(present.has(f)).toBe(true);
+  }
 });
 
 for (const name of ["basic.ndjson", "tool.ndjson", "resume.ndjson"]) {
