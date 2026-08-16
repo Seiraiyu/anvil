@@ -46,3 +46,10 @@ test("the set of wire event/command types matches the golden (no undocumented dr
   // A precise message so a real drift tells you exactly what to reconcile across clients.
   expect({ added, removed }).toEqual({ added: [], removed: [] });
 });
+
+test("the cc-config capability is advertised", async () => {
+  const { SERVER_CAPABILITIES } = await import("../../src/server/identity");
+  // Clients gate the whole Settings → Claude Code area on this string, so dropping or renaming it
+  // silently blanks that page on every client rather than degrading it.
+  expect(SERVER_CAPABILITIES).toContain("cc-config");
+});
