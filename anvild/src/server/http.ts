@@ -28,6 +28,25 @@ import { updateApply, updateCheck, updateStatus, settleAfterBoot, type UpdateApi
 import { isManaged, scheduleRestart, webBundleOk } from "../daemon/selfupdate";
 import { CcInstalls, officialDownloader, resolveLatestVersion } from "../cc/install";
 import { CcBootstrap, registerCcBootstrap } from "../cc/bootstrap";
+import { CcConfigService } from "../session/ccconfig-service";
+import { listPlugins, listAvailablePlugins, pluginOp, listMarketplaces, marketplaceOp } from "../cc/plugins";
+import { listMcpServers, addMcpServer, removeMcpServer } from "../cc/mcp";
+import {
+  readAutoModeConfig,
+  readAutoModeDefaults,
+  writeAutoModeBlock,
+  critiqueAutoMode,
+  resetAutoMode,
+} from "../cc/automode";
+import {
+  listMemory,
+  readMemoryFile,
+  writeMemoryFile,
+  deleteMemoryFile,
+  memoryBudget,
+  readMemorySettings,
+  writeMemorySettings,
+} from "../cc/memory";
 import { smokeTest } from "../cc/smoke";
 import { CcUpdater, CC_API_VERSION } from "../cc/update";
 import { FleetRolloutCoordinator, DesiredTargetStore, httpMemberUpdateClient } from "./fleet-rollout";
@@ -192,6 +211,10 @@ export interface ServerOptions {
   /** Test-only injection of a fully-faked CC updater so /api/cc/v1/* is testable without the
    *  network or a real claude binary (same convention as fleetNet/resolveIdentity). */
   ccUpdater?: CcUpdater;
+  /** Test-only injection of a fully-faked `~/.claude` config service, so /api/cc/v1/{plugins,mcp,
+   *  automode,memory} is testable without shelling out to a real `claude` or touching a real
+   *  ~/.claude (same convention as ccUpdater). */
+  ccConfig?: CcConfigService;
   /** Set by the real daemon (main.ts) to arm the first-run CC bootstrap (design §4.8): a turn on a
    *  machine with no managed install and no `claude` on PATH downloads one instead of failing with
    *  a bare ENOENT. Omitted by tests, so a suite never downloads a CLI. */
@@ -270,6 +293,37 @@ export function createServer(opts: ServerOptions): ServerHandle {
       smoke: smokeTest,
       resolveLatest: () => resolveLatestVersion(),
       stateFile: join(opts.stateDir, "cc-update-state.json"),
+    });
+
+  // The whole per-machine `~/.claude` surface (cc-config design §4.1): plugins, MCP servers,
+  // auto-mode config, memory. Real adapters by default; tests inject `opts.ccConfig`.
+  // Every adapter call is handed the supervisor's CC env, so it resolves the same binary and the
+  // same account a turn would — a config read must not disagree with what the next turn will see.
+  const ccConfig =
+    opts.ccConfig ??
+    new CcConfigService({
+      listPlugins: () => listPlugins({ env: supervisor.ccEnv() }),
+      listAvailable: () => listAvailablePlugins({ env: supervisor.ccEnv() }),
+      pluginOp: (op, id, scope) => pluginOp(op, id, { env: supervisor.ccEnv(), ...(scope ? { scope } : {}) }),
+      listMarketplaces: () => listMarketplaces({ env: supervisor.ccEnv() }),
+      marketplaceOp: (op, source) => marketplaceOp(op, source, { env: supervisor.ccEnv() }),
+      listMcp: () => listMcpServers({ env: supervisor.ccEnv() }),
+      addMcp: (name, config) => addMcpServer(name, config, { env: supervisor.ccEnv() }),
+      removeMcp: (name) => removeMcpServer(name, { env: supervisor.ccEnv() }),
+      readAutoMode: () => readAutoModeConfig(undefined, supervisor.ccEnv()),
+      readAutoModeDefaults: () => readAutoModeDefaults(undefined, supervisor.ccEnv()),
+      writeAutoMode: (cfg) => writeAutoModeBlock(cfg),
+      critiqueAutoMode: () => critiqueAutoMode(undefined, supervisor.ccEnv()),
+      resetAutoMode: () => resetAutoMode(undefined, supervisor.ccEnv()),
+      listMemory: (dir) => listMemory(dir),
+      readMemory: (dir, name) => readMemoryFile(dir, name),
+      writeMemory: (dir, name, text, expected) => writeMemoryFile(dir, name, text, expected),
+      deleteMemory: (dir, name) => deleteMemoryFile(dir, name),
+      memoryBudget: (text) => memoryBudget(text),
+      readMemorySettings: () => readMemorySettings(),
+      writeMemorySettings: (patch) => writeMemorySettings(patch),
+      ccEnv: () => supervisor.ccEnv(),
+      memoryDir: () => supervisor.memoryDir(),
     });
 
   // First-run bootstrap (design §4.8, cc plan 9 task 1): arm the turn paths to download+smoke a CC

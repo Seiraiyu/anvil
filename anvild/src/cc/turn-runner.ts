@@ -81,6 +81,11 @@ export interface TurnRunnerDeps {
   env: Record<string, string>;
   onResult: ResultRecorder;
   onCommands?: (commands: CommandInfo[]) => void;
+  /** `init.memory_paths.auto` — where CC resolved auto-memory for this session's repo. Reported on
+   *  every init and READ, never derived: CC keys memory by git repository and only it knows the
+   *  mapping (cc-config principle 1). The cc-config memory browser has nothing to open until this
+   *  has fired at least once. */
+  onMemoryDir?: (dir: string) => void;
   onTurnError?: (err: unknown) => void;
   /** Command vector for the CC binary. Default: [$ANVIL_CLI_PATH] (the plan-2 managed-install
    *  bridge) or ["claude"] from PATH. Tests point this at the fake harness (["bun", fake-cc.ts]). */
@@ -285,9 +290,12 @@ export class TurnRunner implements SessionDriver {
     if (sid) s.data.claudeSessionId = sid;
 
     // init reports the resolved slash-commands — publish for the composer's `/` autocomplete.
-    if (this.deps.onCommands && m.type === "system" && (m as any).subtype === "init") {
+    if (m.type === "system" && (m as any).subtype === "init") {
       const slash = (m as any).slash_commands;
-      if (Array.isArray(slash)) this.deps.onCommands(buildCommandInfo(slash, s.data.cwd));
+      if (this.deps.onCommands && Array.isArray(slash)) this.deps.onCommands(buildCommandInfo(slash, s.data.cwd));
+      // …and the resolved auto-memory directory, which the cc-config memory browser reads.
+      const mem = (m as any).memory_paths?.auto;
+      if (this.deps.onMemoryDir && typeof mem === "string" && mem) this.deps.onMemoryDir(mem);
     }
 
     // Context compaction boundary → persisted divider (ported from the SDK driver).
