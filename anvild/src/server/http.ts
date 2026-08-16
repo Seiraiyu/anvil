@@ -30,6 +30,7 @@ import { CcInstalls, officialDownloader, resolveLatestVersion } from "../cc/inst
 import { CcBootstrap, registerCcBootstrap } from "../cc/bootstrap";
 import { CcConfigService } from "../session/ccconfig-service";
 import { BadCommand } from "../session/errors";
+import { diffConfig } from "../session/ccconfig-sync";
 import { listPlugins, listAvailablePlugins, pluginOp, listMarketplaces, marketplaceOp } from "../cc/plugins";
 import { listMcpServers, addMcpServer, removeMcpServer } from "../cc/mcp";
 import {
@@ -1004,6 +1005,69 @@ export function createServer(opts: ServerOptions): ServerHandle {
     } catch (e) {
       return ccCfgErr(e);
     }
+  });
+
+  // ── Cross-box sync (design §4.4/§8) ────────────────────────────────────────────────────────────
+  // `plan` fetches the SOURCE server's config and diffs it against this box's; `apply` executes only
+  // the ids the user ticked. Memory is deliberately not in scope (§8 Phase B).
+  route("POST", "/api/cc/v1/sync/plan", async (req, _url, _m, ctx) => {
+    const gate = await ccCfgWriteGate(req, ctx);
+    if (gate) return gate;
+    const body = (await jsonBody<{ sourceUrl?: string }>(req)) ?? {};
+    if (!body.sourceUrl) return new Response("sourceUrl required", { status: 400 });
+    let source: URL;
+    try {
+      source = new URL(body.sourceUrl);
+    } catch {
+      return new Response("sourceUrl must be an absolute URL", { status: 400 });
+    }
+    try {
+      const get = async (path: string): Promise<any> => {
+        const r = await fetch(new URL(path, source), { signal: AbortSignal.timeout(15_000) });
+        if (!r.ok) throw new Error(`${path} on the source server answered ${r.status}`);
+        return r.json();
+      };
+      const [sp, sm, sa] = await Promise.all([
+        get("/api/cc/v1/plugins"),
+        get("/api/cc/v1/mcp"),
+        get("/api/cc/v1/automode"),
+      ]);
+      const [tp, tm, ta] = await Promise.all([ccConfig.list(), ccConfig.mcp(), ccConfig.autoMode()]);
+      return Response.json({
+        diff: diffConfig(
+          { plugins: sp.plugins ?? [], mcp: sm.servers ?? [], autoMode: sa.config ?? sa },
+          { plugins: tp, mcp: tm, autoMode: ta },
+        ),
+      });
+    } catch (e) {
+      return ccCfgErr(e);
+    }
+  });
+  route("POST", "/api/cc/v1/sync/apply", async (req, _url, _m, ctx) => {
+    const gate = await ccCfgWriteGate(req, ctx);
+    if (gate) return gate;
+    const body =
+      (await jsonBody<{ install?: string[]; remove?: string[]; update?: string[] }>(req)) ?? {};
+    const jobs: { id: string; run: () => Promise<unknown> }[] = [
+      ...(body.install ?? []).map((id) => ({ id, run: () => ccConfig.op("install", id) })),
+      ...(body.update ?? []).map((id) => ({ id, run: () => ccConfig.op("update", id) })),
+      // Removals last: if an install fails the user still has the box they started with.
+      ...(body.remove ?? []).map((id) => ({ id, run: () => ccConfig.op("uninstall", id) })),
+    ];
+    // Sequential on purpose — the service serialises mutations anyway, and running them concurrently
+    // would just surface "already in progress" as a spurious per-item failure.
+    const results: { id: string; ok: boolean; error?: string }[] = [];
+    for (const j of jobs) {
+      try {
+        await j.run();
+        results.push({ id: j.id, ok: true });
+      } catch (e) {
+        results.push({ id: j.id, ok: false, error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+    // NEVER report overall success when any item failed (design §7). 200 with per-item detail: the
+    // request itself succeeded, and the client renders each row's outcome.
+    return Response.json({ ok: results.every((r) => r.ok), results });
   });
 
   // Fleet discovery (anvil-multi-server.md §4.1): enumerate Tailscale peers + probe each

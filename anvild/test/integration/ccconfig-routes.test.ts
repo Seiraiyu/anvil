@@ -324,3 +324,135 @@ test("every write verb rejects a non-JSON content-type", async () => {
     }
   });
 });
+
+// ── sync (task 22) ──────────────────────────────────────────────────────────────────────────────
+
+test("sync/apply reports PER-ITEM results and never claims success when one failed", async () => {
+  const attempted: string[] = [];
+  await withServer(
+    fakeService({
+      pluginOp: async (_op, id) => {
+        attempted.push(id);
+        if (id === "bad@m") throw new Error("marketplace unreachable");
+        return "ok";
+      },
+    }),
+    async (base) => {
+      const res = await fetch(`${base}/api/cc/v1/sync/apply`, {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ install: ["good@m", "bad@m", "also-good@m"] }),
+      });
+      expect(res.status).toBe(200); // the REQUEST succeeded; the items are reported individually
+      const body = (await res.json()) as { ok: boolean; results: { id: string; ok: boolean; error?: string }[] };
+      expect(body.ok).toBe(false); // design §7: one failure means NOT overall success
+      expect(body.results.map((r) => [r.id, r.ok])).toEqual([
+        ["good@m", true],
+        ["bad@m", false],
+        ["also-good@m", true],
+      ]);
+      expect(body.results.find((r) => r.id === "bad@m")!.error).toMatch(/marketplace unreachable/);
+    },
+  );
+  // A failure mid-run must not abort the rest — the user ticked three rows and gets three verdicts.
+  expect(attempted).toEqual(["good@m", "bad@m", "also-good@m"]);
+});
+
+test("sync/apply runs removals LAST, so a failed install leaves the box as it was", async () => {
+  const order: string[] = [];
+  await withServer(
+    fakeService({ pluginOp: async (op, id) => (order.push(`${op}:${id}`), "ok") }),
+    async (base) => {
+      await fetch(`${base}/api/cc/v1/sync/apply`, {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ remove: ["old@m"], install: ["new@m"], update: ["mid@m"] }),
+      });
+    },
+  );
+  expect(order).toEqual(["install:new@m", "update:mid@m", "uninstall:old@m"]);
+});
+
+test("sync/apply with nothing ticked is a clean no-op", async () => {
+  let called = 0;
+  await withServer(fakeService({ pluginOp: async () => (called++, "ok") }), async (base) => {
+    const res = await fetch(`${base}/api/cc/v1/sync/apply`, { method: "POST", headers: JSON_HEADERS, body: "{}" });
+    const body = (await res.json()) as { ok: boolean; results: unknown[] };
+    expect(body).toEqual({ ok: true, results: [] });
+  });
+  expect(called).toBe(0);
+});
+
+test("sync/plan rejects a missing or non-absolute sourceUrl before reaching out", async () => {
+  await withServer(fakeService(), async (base) => {
+    const post = (body: unknown) =>
+      fetch(`${base}/api/cc/v1/sync/plan`, { method: "POST", headers: JSON_HEADERS, body: JSON.stringify(body) });
+    expect((await post({})).status).toBe(400);
+    expect((await post({ sourceUrl: "not-a-url" })).status).toBe(400);
+  });
+});
+
+test("sync/plan diffs a real source server against this one", async () => {
+  // Boot a SECOND server to act as the sync source — the diff is a genuine cross-box read.
+  const sourceSrv = await bootServer({
+    ccConfig: fakeService({
+      listPlugins: async () => [
+        { id: "shared@m", name: "shared", marketplace: "m", version: "1", enabled: true, scope: "user", mcpServers: [] },
+        { id: "only-on-source@m", name: "only-on-source", marketplace: "m", version: "1", enabled: true, scope: "user", mcpServers: [] },
+      ],
+    }),
+  });
+  try {
+    await withServer(
+      fakeService({
+        listPlugins: async () => [
+          { id: "shared@m", name: "shared", marketplace: "m", version: "1", enabled: true, scope: "user", mcpServers: [] },
+          { id: "only-on-target@m", name: "only-on-target", marketplace: "m", version: "1", enabled: true, scope: "user", mcpServers: [] },
+        ],
+      }),
+      async (base) => {
+        const res = await fetch(`${base}/api/cc/v1/sync/plan`, {
+          method: "POST",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ sourceUrl: sourceSrv.base }),
+        });
+        expect(res.status).toBe(200);
+        const { diff } = (await res.json()) as {
+          diff: { plugins: { install: { id: string }[]; remove: { id: string; selected: boolean }[] } };
+        };
+        expect(diff.plugins.install.map((x) => x.id)).toEqual(["only-on-source@m"]);
+        expect(diff.plugins.remove.map((x) => x.id)).toEqual(["only-on-target@m"]);
+        expect(diff.plugins.remove[0]!.selected).toBe(false); // never pre-ticked for destruction
+      },
+    );
+  } finally {
+    sourceSrv.cleanup();
+  }
+});
+
+test("sync/plan surfaces a FAILING source as an error, not an empty diff", async () => {
+  // An empty diff here would read as "the boxes already match" — the most dangerous possible
+  // misreport for a sync feature, since the user would conclude there is nothing to do.
+  // (A closed port is not used as the stimulus: connecting to one hangs rather than refusing under
+  // WSL, which made the test time out instead of asserting anything.)
+  const sourceSrv = await bootServer({
+    ccConfig: fakeService({
+      listPlugins: async () => {
+        throw new Error("source box is broken");
+      },
+    }),
+  });
+  try {
+    await withServer(fakeService(), async (base) => {
+      const res = await fetch(`${base}/api/cc/v1/sync/plan`, {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ sourceUrl: sourceSrv.base }),
+      });
+      expect(res.status).toBe(500);
+      expect(((await res.json()) as { error: string }).error).toMatch(/answered 500/);
+    });
+  } finally {
+    sourceSrv.cleanup();
+  }
+});
