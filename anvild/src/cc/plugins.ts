@@ -66,18 +66,83 @@ export function parsePluginList(raw: string): PluginInfo[] {
 }
 
 /**
- * Run one `claude …` subcommand and hand back its merged output.
+ * Run one `claude …` subcommand, returning trimmed merged output. Throws on nonzero exit.
  *
  * Shared by every command in this module so the binary-resolution precedence
  * (`ANVIL_CLI_PATH` → managed `current` → `claude` on PATH) is applied in exactly one place.
- * `out` is merged stdout+stderr, already trimmed — the CLI writes some notices to stderr, so a
- * non-zero exit's explanation is usually in there.
+ * `out` is merged stdout+stderr — the CLI writes notices to stderr, so a failure's explanation is
+ * usually in there, and passing it through beats inventing a message (design §7).
  */
-export async function runCc(args: string[], opts: PluginCliOpts = {}): Promise<{ code: number; out: string }> {
+async function cc(args: string[], opts: PluginCliOpts): Promise<string> {
   const env = opts.env ?? (process.env as Record<string, string | undefined>);
-  const run = opts.run ?? defaultRun;
+  const runner = opts.run ?? defaultRun;
   const cmd = [...resolveCcCommand(env), ...args];
-  const filtered: Record<string, string> = {};
-  for (const [k, v] of Object.entries(env)) if (v !== undefined) filtered[k] = v;
-  return run(cmd, { env: filtered, timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS });
+  const { code, out } = await runner(cmd, {
+    timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    ...(opts.env ? { env: opts.env as Record<string, string> } : {}),
+  });
+  if (code !== 0) throw new Error(out || `claude ${args.join(" ")} exited ${code}`);
+  return out;
+}
+
+// ── reads ───────────────────────────────────────────────────────────────────────────────────────
+// Flags verified against claude 2.1.233: `plugin list` takes `--json` and `--available`
+// (which itself REQUIRES --json, so both are always passed together).
+
+export const listPlugins = async (opts: PluginCliOpts = {}): Promise<PluginInfo[]> =>
+  parsePluginList(await cc(["plugin", "list", "--json"], opts));
+
+export const listAvailablePlugins = async (opts: PluginCliOpts = {}): Promise<PluginInfo[]> =>
+  parsePluginList(await cc(["plugin", "list", "--available", "--json"], opts));
+
+// ── writes ──────────────────────────────────────────────────────────────────────────────────────
+
+/** The closed set of plugin mutations Anvil exposes. Anything else is refused. */
+export type PluginOp = "install" | "uninstall" | "enable" | "disable" | "update";
+const PLUGIN_OPS: readonly PluginOp[] = ["install", "uninstall", "enable", "disable", "update"];
+
+/** Plugin ids are `name@marketplace` — letters, digits and a small punctuation set. We REJECT
+ *  anything else rather than trying to escape it: there is no legitimate id with a shell
+ *  metacharacter, and rejecting keeps this impossible to turn into command injection. */
+const SAFE_ID = /^[A-Za-z0-9._@/-]{1,200}$/;
+
+export interface PluginOpOpts extends PluginCliOpts {
+  /** `user` (default), `project` or `local` — the CLI's own scopes. */
+  scope?: string;
+}
+
+export async function pluginOp(op: PluginOp, id: string, opts: PluginOpOpts = {}): Promise<string> {
+  if (!PLUGIN_OPS.includes(op)) throw new Error(`unsupported plugin operation: ${op}`);
+  if (!SAFE_ID.test(id)) throw new Error(`invalid plugin id: ${id}`);
+  const args = ["plugin", op, id];
+  // `-y` is REQUIRED for a marketplace-declared install command when stdin/stdout is not a TTY,
+  // which is always true for us. Only install prompts, so only install gets it.
+  if (op === "install") {
+    args.push("--yes");
+    if (opts.scope) args.push("--scope", opts.scope);
+  }
+  return cc(args, opts);
+}
+
+// ── marketplaces ────────────────────────────────────────────────────────────────────────────────
+
+export type MarketplaceOp = "add" | "remove" | "update";
+const MARKETPLACE_OPS: readonly MarketplaceOp[] = ["add", "remove", "update"];
+/** A marketplace source is a URL, a path, or `owner/repo` — same reject-don't-escape rule as ids. */
+const SAFE_SOURCE = /^[A-Za-z0-9._:@/~-]{1,400}$/;
+
+/** Marketplaces are listed as raw JSON text; callers hand it straight to the client. */
+export const listMarketplaces = async (opts: PluginCliOpts = {}): Promise<unknown> => {
+  const raw = await cc(["plugin", "marketplace", "list", "--json"], opts);
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+};
+
+export async function marketplaceOp(op: MarketplaceOp, source: string, opts: PluginCliOpts = {}): Promise<string> {
+  if (!MARKETPLACE_OPS.includes(op)) throw new Error(`unsupported marketplace operation: ${op}`);
+  if (!SAFE_SOURCE.test(source)) throw new Error(`invalid marketplace source: ${source}`);
+  return cc(["plugin", "marketplace", op, source], opts);
 }

