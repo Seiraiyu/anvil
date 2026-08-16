@@ -30,8 +30,8 @@
 | 16 | Wire the service into the server | pending | no | no |
 | 17 | REST read routes (4 domains) | pending | no | no |
 | 18 | REST write routes + job progress | pending | no | no |
-| 19 | Protocol: `PermissionMode` gains `auto`/`dontAsk` + golden regen | pending | no | no |
-| 20 | `auto` becomes the new-session default | pending | no | no |
+| 19 | Protocol: `PermissionMode` gains `auto`/`dontAsk` + golden regen | **done** | yes | no |
+| 20 | `auto` becomes the new-session default | **done** (widened, see note) | yes | no |
 | 21 | Sync diff computation (plugins, MCP, autoMode) | pending | no | no |
 | 22 | Sync REST endpoint | pending | no | no |
 | 23 | Web: `ccconfig.ts` seam + Settings section shell | pending | no | no |
@@ -41,7 +41,7 @@
 | 27 | Web: sync diff UI | pending | no | no |
 | 28 | Web DOM tests | pending | no | no |
 | 29 | Docs: ARCHITECTURE + SECURITY | pending | no | no |
-| 30 | Live pass on hub + one member | pending | no | no |
+| 30 | Live pass on hub + one member | **partial**: `permissions.ask` proven (probe-auto-ask.ts); domains pending | partial | no |
 
 ---
 
@@ -71,6 +71,41 @@ Read these once; they apply to every task.
 
 Every task below carries its complete code. This plan absorbed the tasks of the earlier
 plugin/MCP plan, which has since been deleted — there is nothing else to go and read.
+
+---
+
+### Execution note — Tasks 19/20 (2026-08-16)
+
+**Task 20 shipped wider than written.** The plan listed only `dialogs.ts` + the turn-runner fallback,
+but the supervisor stamps a concrete mode onto every session record at create time, so that fallback
+is nearly unreachable and changing it alone would have moved nothing. The default was switched at
+every creation path: `supervisor.ts` (`session.create` + the default "Claude" session),
+`autopilot-service.ts` (build session), and `default-tools.ts` — whose hand-copied zod enum would have
+**rejected** `"auto"` outright, making the new default unreachable from the `session_handoff` MCP tool.
+That enum now derives from `PERMISSION_MODES`. Also retargeted `outbox.ts`'s legacy
+`mostly-autonomous → bypassPermissions` mapping to `auto`, which is the mapping D-6 exists to correct.
+
+**Two deliberate non-changes**, pinned by tests so a later sweep does not "fix" them: autopilot's
+*planning* session stays `default` (it exists to ask the open questions), and `dontAsk` does not
+auto-approve team plans.
+
+**`team-gate.ts` had to change with it.** `shouldAutoApprove` gated on `bypassPermissions` alone, so
+making `auto` the default would have silently turned every team lead's decomposition into an approval
+card. `auto` now auto-approves too.
+
+**Task 19 was a no-op for the golden** — the union is a string field on existing envelopes, so the
+regenerated `protocol-surface.golden.json` is byte-identical (v5, 150 wire types). Note the plan's
+predicted "web typecheck break as a missed-picker-site detector" does **not** fire: the picker is an
+HTML string, not an exhaustive typed switch. Audit picker sites by hand.
+
+**CC 2.1.233 renamed `default` → `manual`** in `--permission-mode`'s choices list but still accepts
+`default`; verified live. The wire keeps `default`, so stored sessions and old clients stay valid.
+
+**Task 30's `permissions.ask` check is done, and automated** — `anvild/test/tools/probe-auto-ask.ts`
+proves the composition against a real local remote: an ask-matched `git push` reaches
+`mcp__anvild__approve`; deny leaves the remote at 0 commits; allow lets the push land; an auto-allowed
+command still never prompts. The remaining Task 30 work is the four config domains and the fleet sync,
+which need the adapter chains first.
 
 ---
 
