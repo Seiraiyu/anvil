@@ -26,7 +26,9 @@ export function webDirOk(prefix = "anvil-webdir-"): string {
  * token so the agent path is reachable. Returns the base URL + a cleanup that stops the server and
  * removes the dir. `createServer` is imported lazily so a caller that mocks the SDK first still wins.
  */
-export async function bootServer(opts: { fleetMembers?: unknown[] } = {}): Promise<{ base: string; dir: string; port: number; cleanup: () => void }> {
+export async function bootServer(
+  opts: { fleetMembers?: unknown[]; ccConfig?: unknown } = {},
+): Promise<{ base: string; dir: string; port: number; cleanup: () => void }> {
   process.env.CLAUDE_CODE_OAUTH_TOKEN ||= "sk-ant-oat-test-placeholder";
   const { createServer } = await import("../../src/server/http");
   const { dir, cleanup } = tmpDir("anvil-srv-");
@@ -34,7 +36,15 @@ export async function bootServer(opts: { fleetMembers?: unknown[] } = {}): Promi
     const { writeFileSync } = await import("node:fs");
     writeFileSync(join(dir, "fleet.json"), JSON.stringify({ members: opts.fleetMembers }));
   }
-  const srv = createServer({ host: "127.0.0.1", port: 0, stateDir: dir, envFile: join(dir, "env") });
+  const srv = createServer({
+    host: "127.0.0.1",
+    port: 0,
+    stateDir: dir,
+    envFile: join(dir, "env"),
+    // Injected fake so the cc-config routes are testable without shelling out to a real `claude`
+    // or touching a real ~/.claude (ground rules).
+    ...(opts.ccConfig ? { ccConfig: opts.ccConfig as never } : {}),
+  });
   return {
     base: `http://127.0.0.1:${srv.port}`,
     dir,

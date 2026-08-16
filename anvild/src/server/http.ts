@@ -29,9 +29,11 @@ import { isManaged, scheduleRestart, webBundleOk } from "../daemon/selfupdate";
 import { CcInstalls, officialDownloader, resolveLatestVersion } from "../cc/install";
 import { CcBootstrap, registerCcBootstrap } from "../cc/bootstrap";
 import { CcConfigService } from "../session/ccconfig-service";
+import { BadCommand } from "../session/errors";
 import { listPlugins, listAvailablePlugins, pluginOp, listMarketplaces, marketplaceOp } from "../cc/plugins";
 import { listMcpServers, addMcpServer, removeMcpServer } from "../cc/mcp";
 import {
+  AUTOMODE_SECTIONS,
   readAutoModeConfig,
   readAutoModeDefaults,
   writeAutoModeBlock,
@@ -799,6 +801,209 @@ export function createServer(opts: ServerOptions): ServerHandle {
       return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 409 });
     }
     return Response.json({ ccApiVersion: CC_API_VERSION, ...ccUpdater.status() });
+  });
+
+  // ── The `~/.claude` config surface (cc-config design §7) ───────────────────────────────────────
+  // Reads are tailnet-gated like the rest of /api/cc/v1. Writes additionally require a JSON
+  // content-type and reject a proven different tailnet user, matching /apply: installing a plugin or
+  // adding an MCP server is code execution on this box, and an auto-mode edit moves the safety gate.
+  //
+  // BadCommand (bad args, no memory dir yet) is the caller's fault → 400. Anything else is this
+  // machine's → 500 with the CLI's own message, which is the most useful thing we can show.
+  const ccCfgErr = (e: unknown): Response => {
+    const msg = e instanceof Error ? e.message : String(e);
+    return Response.json({ error: msg }, { status: e instanceof BadCommand ? 400 : 500 });
+  };
+  /** Shared write gate: JSON content-type + tailnet identity. Returns a Response to short-circuit. */
+  const ccCfgWriteGate = async (req: Request, ctx: ReqCtx): Promise<Response | undefined> => {
+    const ct = (req.headers.get("content-type") || "").toLowerCase();
+    if (!ct.includes("application/json")) return new Response("application/json required", { status: 415 });
+    const who = await ctx.callerIdentity();
+    if (who.trust === "otherUser" && !ctx.localNoIdentityCaller) {
+      return Response.json({ error: who.reject ?? "different tailnet user" }, { status: 403 });
+    }
+    return undefined;
+  };
+
+  route("GET", "/api/cc/v1/plugins", async () => {
+    try {
+      return Response.json({ plugins: await ccConfig.list() });
+    } catch (e) {
+      return ccCfgErr(e);
+    }
+  });
+  route("GET", "/api/cc/v1/plugins/available", async () => {
+    try {
+      return Response.json({ plugins: await ccConfig.available() });
+    } catch (e) {
+      return ccCfgErr(e);
+    }
+  });
+  route("GET", "/api/cc/v1/marketplaces", async () => {
+    try {
+      return Response.json({ marketplaces: await ccConfig.marketplaces() });
+    } catch (e) {
+      return ccCfgErr(e);
+    }
+  });
+  route("GET", "/api/cc/v1/mcp", async () => {
+    try {
+      return Response.json({ servers: await ccConfig.mcp() });
+    } catch (e) {
+      return ccCfgErr(e);
+    }
+  });
+  route("GET", "/api/cc/v1/automode", async () => {
+    try {
+      // Effective config AND the built-ins together: the client cannot render the `$defaults`
+      // splice preview (or warn that a section is about to discard them) without both.
+      const [config, defaults] = await Promise.all([ccConfig.autoMode(), ccConfig.autoModeDefaults()]);
+      return Response.json({ config, defaults });
+    } catch (e) {
+      return ccCfgErr(e);
+    }
+  });
+  route("GET", "/api/cc/v1/memory", () => {
+    try {
+      return Response.json({ files: ccConfig.memoryFiles(), settings: ccConfig.memorySettings() });
+    } catch (e) {
+      return ccCfgErr(e);
+    }
+  });
+  route("GET", "/api/cc/v1/memory/settings", () => {
+    try {
+      return Response.json(ccConfig.memorySettings());
+    } catch (e) {
+      return ccCfgErr(e);
+    }
+  });
+  // Registered AFTER /memory/settings so that literal path wins over this pattern.
+  routeRe("GET", /^\/api\/cc\/v1\/memory\/([^/]+)$/, (_req, _url, m) => {
+    try {
+      return Response.json(ccConfig.memoryFile(decodeURIComponent(m![1]!)));
+    } catch (e) {
+      return ccCfgErr(e);
+    }
+  });
+
+  const PLUGIN_OPS = new Set(["install", "uninstall", "enable", "disable", "update"]);
+  routeRe("POST", /^\/api\/cc\/v1\/plugins\/([a-z]+)$/, async (req, _url, m, ctx) => {
+    const op = m![1]!;
+    if (!PLUGIN_OPS.has(op)) return new Response(`unknown plugin operation: ${op}`, { status: 400 });
+    const gate = await ccCfgWriteGate(req, ctx);
+    if (gate) return gate;
+    const body = (await jsonBody<{ id?: string; scope?: string }>(req)) ?? {};
+    if (!body.id) return new Response("id required", { status: 400 });
+    try {
+      return Response.json({ output: await ccConfig.op(op as never, body.id, body.scope) });
+    } catch (e) {
+      return ccCfgErr(e);
+    }
+  });
+  route("POST", "/api/cc/v1/marketplaces", async (req, _url, _m, ctx) => {
+    const gate = await ccCfgWriteGate(req, ctx);
+    if (gate) return gate;
+    const body = (await jsonBody<{ op?: string; source?: string }>(req)) ?? {};
+    if (!body.op || !["add", "remove", "update"].includes(body.op)) {
+      return new Response("op must be add|remove|update", { status: 400 });
+    }
+    if (!body.source) return new Response("source required", { status: 400 });
+    try {
+      return Response.json({ output: await ccConfig.marketplace(body.op as never, body.source) });
+    } catch (e) {
+      return ccCfgErr(e);
+    }
+  });
+  route("POST", "/api/cc/v1/mcp", async (req, _url, _m, ctx) => {
+    const gate = await ccCfgWriteGate(req, ctx);
+    if (gate) return gate;
+    const body = (await jsonBody<{ op?: string; name?: string; config?: Record<string, unknown> }>(req)) ?? {};
+    if (!body.name) return new Response("name required", { status: 400 });
+    try {
+      if (body.op === "add") return Response.json({ output: await ccConfig.addMcp(body.name, body.config ?? {}) });
+      if (body.op === "remove") return Response.json({ output: await ccConfig.removeMcp(body.name) });
+      return new Response("op must be add|remove", { status: 400 });
+    } catch (e) {
+      return ccCfgErr(e);
+    }
+  });
+  route("PUT", "/api/cc/v1/automode", async (req, _url, _m, ctx) => {
+    const gate = await ccCfgWriteGate(req, ctx);
+    if (gate) return gate;
+    const body = (await jsonBody<{ config?: Record<string, string[]> }>(req)) ?? {};
+    const c = body.config;
+    if (!c || AUTOMODE_SECTIONS.some((s) => c[s] !== undefined && !Array.isArray(c[s]))) {
+      return new Response("config must carry string arrays for the auto-mode sections", { status: 400 });
+    }
+    const cfg = {
+      allow: c.allow ?? [],
+      soft_deny: c.soft_deny ?? [],
+      hard_deny: c.hard_deny ?? [],
+      environment: c.environment ?? [],
+    };
+    try {
+      await ccConfig.writeAutoMode(cfg);
+      return Response.json({ ok: true });
+    } catch (e) {
+      return ccCfgErr(e);
+    }
+  });
+  route("POST", "/api/cc/v1/automode/critique", async (req, _url, _m, ctx) => {
+    const gate = await ccCfgWriteGate(req, ctx);
+    if (gate) return gate;
+    try {
+      return Response.json({ critique: await ccConfig.critique() });
+    } catch (e) {
+      return ccCfgErr(e);
+    }
+  });
+  route("POST", "/api/cc/v1/automode/reset", async (req, _url, _m, ctx) => {
+    const gate = await ccCfgWriteGate(req, ctx);
+    if (gate) return gate;
+    try {
+      await ccConfig.resetAutoMode();
+      return Response.json({ ok: true });
+    } catch (e) {
+      return ccCfgErr(e);
+    }
+  });
+  route("PUT", "/api/cc/v1/memory/settings", async (req, _url, _m, ctx) => {
+    const gate = await ccCfgWriteGate(req, ctx);
+    if (gate) return gate;
+    const body = (await jsonBody<{ autoMemoryEnabled?: boolean; autoMemoryDirectory?: string | null }>(req)) ?? {};
+    try {
+      await ccConfig.writeMemorySettings(body);
+      return Response.json(ccConfig.memorySettings());
+    } catch (e) {
+      return ccCfgErr(e);
+    }
+  });
+  routeRe("PUT", /^\/api\/cc\/v1\/memory\/([^/]+)$/, async (req, _url, m, ctx) => {
+    const gate = await ccCfgWriteGate(req, ctx);
+    if (gate) return gate;
+    const body = (await jsonBody<{ text?: string; expectedModified?: string }>(req)) ?? {};
+    if (typeof body.text !== "string") return new Response("text required", { status: 400 });
+    try {
+      // A stale expectedModified is a 409, not a 500: Claude writes memory mid-session, so losing
+      // the race is an ordinary outcome the client retries after re-reading, not a server fault.
+      return Response.json(
+        await ccConfig.writeMemory(decodeURIComponent(m![1]!), body.text, body.expectedModified),
+      );
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (/changed on disk/.test(msg)) return Response.json({ error: msg }, { status: 409 });
+      return ccCfgErr(e);
+    }
+  });
+  routeRe("DELETE", /^\/api\/cc\/v1\/memory\/([^/]+)$/, async (req, _url, m, ctx) => {
+    const gate = await ccCfgWriteGate(req, ctx);
+    if (gate) return gate;
+    try {
+      await ccConfig.deleteMemory(decodeURIComponent(m![1]!));
+      return Response.json({ ok: true });
+    } catch (e) {
+      return ccCfgErr(e);
+    }
   });
 
   // Fleet discovery (anvil-multi-server.md §4.1): enumerate Tailscale peers + probe each
