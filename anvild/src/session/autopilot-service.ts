@@ -637,7 +637,7 @@ export class AutopilotService {
       source: "fresh-worktree",
       title: u.title,
       model: model ?? "opus",
-      permissionMode: permissionMode ?? "bypassPermissions",
+      permissionMode: permissionMode ?? "auto", // D-6: unattended, but with the destructive-action floor
       brief,
     });
     // Clear any auto-start hold — a human is deliberately starting it now — and record the seeded goal.

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { defineTool, type AnvilToolServer } from "../cc/tool-host";
+import { PERMISSION_MODES } from "@protocol";
 import type { Environment, Model, PermissionMode, Session as SessionData, SessionSource } from "@protocol";
 
 /**
@@ -120,9 +121,11 @@ export function buildDefaultToolsServer(deps: DefaultToolDeps): AnvilToolServer 
           title: z.string().describe("Short human title for the session (also used as the branch slug)."),
           model: z.enum(["opus", "sonnet"]).optional().describe("Model for the new session (default opus)."),
           permissionMode: z
-            .enum(["default", "acceptEdits", "plan", "bypassPermissions"])
+            // Driven off the protocol constant, not a hand-copied list: a literal here silently
+            // REJECTS any mode added to the union (that is how `auto`/`dontAsk` were unreachable).
+            .enum(PERMISSION_MODES as unknown as [PermissionMode, ...PermissionMode[]])
             .optional()
-            .describe("Permission mode for the new session (default bypassPermissions)."),
+            .describe("Permission mode for the new session (default auto)."),
           brief: z
             .string()
             .describe("The handoff brief: the full, self-contained first instruction the new session should act on."),

@@ -313,3 +313,29 @@ test("interrupt fires onAbnormalEnd (disk may know more than the stream)", async
   await until(() => fired === 1);
   await until(() => data.status === "idle");
 });
+
+test("init's memory_paths.auto is captured (cc-config reads CC's path, never derives it)", async () => {
+  const { s } = fakeSession("sess_memdir");
+  const seen: string[] = [];
+  const { tr, results } = runner(s, {}, { onMemoryDir: (d: string) => void seen.push(d) });
+  tr.prompt("go");
+  await until(() => results.length === 1);
+  // The golden init line carries memory_paths.auto; the memory browser has nothing to open until
+  // this has fired, which is why the service reports "run a turn first" rather than guessing.
+  expect(seen).toHaveLength(1);
+  expect(seen[0]).toMatch(/memory/);
+});
+
+test("an init WITHOUT memory_paths does not fire the callback (no empty-string dir)", async () => {
+  const { s } = fakeSession("sess_memdir_absent");
+  const seen: string[] = [];
+  const { tr } = runner(s, {}, { onMemoryDir: (d: string) => void seen.push(d) });
+  // Drive the parser directly with an init lacking memory_paths — an older CC, or a non-repo cwd.
+  (tr as unknown as { handleMessage(m: unknown): void }).handleMessage({
+    type: "system",
+    subtype: "init",
+    session_id: "x",
+    slash_commands: [],
+  });
+  expect(seen).toEqual([]);
+});

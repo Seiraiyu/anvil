@@ -1,11 +1,16 @@
 import { test, expect } from "bun:test";
 import { shouldAutoApprove, spawnPaused, relayExhausted, MAX_TEAM_RELAY_HOPS } from "../../src/integrations/team-gate";
 
-test("bypassPermissions auto-approves; everything else waits", () => {
+// `auto` joins `bypassPermissions` because D-6 made it the new-session default: gating on
+// bypassPermissions alone would silently turn every lead's decomposition into an approval card.
+// `dontAsk` deliberately does NOT auto-approve — its whole contract is that nothing unapproved runs.
+test("the unattended modes auto-approve; everything else waits", () => {
   expect(shouldAutoApprove("bypassPermissions")).toBe(true);
+  expect(shouldAutoApprove("auto")).toBe(true);
   expect(shouldAutoApprove("default")).toBe(false);
   expect(shouldAutoApprove("acceptEdits")).toBe(false);
   expect(shouldAutoApprove("plan")).toBe(false);
+  expect(shouldAutoApprove("dontAsk")).toBe(false);
 });
 
 test("member spawns pause only while the budget is in its warn zone", () => {

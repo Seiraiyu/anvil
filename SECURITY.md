@@ -85,6 +85,32 @@ perimeter can't:
   - Tokens are validated on the way in at every entry point — UI, replication and the boot migration
     — so a metered `sk-ant-api…` key cannot enter the roster and reach a member.
 
+## Managing `~/.claude` from the app
+
+Anvil can edit the per-machine Claude Code config — plugins, MCP servers, the auto-mode classifier
+config, and memory (`/api/cc/v1/*`, behind the `cc-config` capability). Two hazards are specific to
+that surface and worth stating plainly.
+
+- **The auto-mode classifier reads `CLAUDE.md`.** An instruction written there steers the safety gate
+  as well as the agent. Claude Code auto-allows `CLAUDE.md` edits only *where the content does not
+  change permissions, authorizations, or auto-mode behaviour* — but note that Anvil's merged
+  `claude-md-reflection` path writes `CLAUDE.md` from an agent turn, and is in scope for that rule.
+  Any future memory/`CLAUDE.md` sync would move classifier-steering content between machines, so it
+  must be treated as privileged replication, not a file copy. (This is part of why memory is
+  deliberately excluded from the sync diff today.)
+- **`autoMode` is only ever written to `~/.claude/settings.json`.** Claude Code deliberately excludes
+  *project* settings from `autoMode` resolution, so that a checked-in repository cannot inject its
+  own allow rules into the classifier. Writing the block to a project settings file would reopen
+  exactly the hole CC closed; the writer is pinned to the user file by test.
+
+Beyond those: plugin ids and MCP server names are **rejected** rather than escaped when they carry
+shell metacharacters, MCP configs travel to the CLI as a single JSON argument rather than shell
+words, memory file access is confined to CC's reported memory directory (traversal and symlink
+escapes refused), and every write route requires a JSON content-type and rejects a proven different
+tailnet user — the same gate as a binary update, because installing a plugin is code execution on
+that box. MCP rows render name, target and status only; header, env and token values are never sent
+to a client.
+
 ## Reporting a vulnerability
 
 Email **evan.ruff@oxos.com** with details and reproduction steps. Please do not open a public issue

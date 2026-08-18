@@ -120,14 +120,28 @@ export const isModel = (m: unknown): m is Model => MODELS.some((x) => x.id === m
  * Claude Code's native permission modes (cc-cli-transport §4.7 delta 1 — replaces the old
  * autonomy dial). Maps 1:1 to the CLI's `--permission-mode`; the CLI's own engine decides
  * which calls prompt, and prompts route to the daemon's approve tool (design §4.4).
+ *
+ * `auto`/`dontAsk` are additive members (cc-config design §6.5) — the union is a string field on
+ * envelopes that already exist, so PROTOCOL_VERSION is unchanged. Note the CLI now spells `default`
+ * as `manual` in its own `--permission-mode` choices list; it still accepts `default` as an alias,
+ * and the wire keeps `default` so old clients and stored sessions stay valid.
  */
 export type PermissionMode =
-  | "default" // CC's standard engine: safe tools auto-allowed, everything else prompts
+  | "default" // Manual: CC's standard engine — safe tools auto-allowed, everything else prompts
   | "acceptEdits" // file edits auto-accepted; other prompt-worthy tools still prompt
   | "plan" // read-only planning: edits/writes blocked
+  | "auto" // classifier-gated: runs everything, blocks irreversible/destructive/exfiltrating actions
+  | "dontAsk" // auto-DENIES anything that would prompt; only pre-approved tools run (CI)
   | "bypassPermissions"; // DANGER: never prompt — allow every tool
 
-export const PERMISSION_MODES: readonly PermissionMode[] = ["default", "acceptEdits", "plan", "bypassPermissions"];
+export const PERMISSION_MODES: readonly PermissionMode[] = [
+  "default",
+  "acceptEdits",
+  "plan",
+  "auto",
+  "dontAsk",
+  "bypassPermissions",
+];
 export const isPermissionMode = (m: unknown): m is PermissionMode => PERMISSION_MODES.includes(m as PermissionMode);
 
 export type SessionSource = "existing-dir" | "fresh-worktree";
@@ -281,7 +295,7 @@ export interface Session {
   worktree?: Worktree; // present when source === "fresh-worktree"
   git?: GitStatus;
   model: Model; // default "opus" (§3)
-  permissionMode: PermissionMode; // default "bypassPermissions" (matches the old mostly-autonomous behavior)
+  permissionMode: PermissionMode; // default "auto" (classifier-gated; see cc-config design D-6)
   adversarialReview?: boolean; // opt-in: when planning, competing OpenRouter models critique the plan
   // before execution (the autopilot adversarial panel, brought to interactive sessions). Advisory only;
   // needs an OpenRouter key. Default off. (§6.6 / adversarial panel)
@@ -1378,7 +1392,7 @@ export interface SessionCreateCmd extends Envelope, Correlated {
   title?: string;
   environmentId?: string; // the Environment this came from (for grouping/labeling)
   model?: Model; // defaults to "opus"
-  permissionMode?: PermissionMode; // defaults to "bypassPermissions" (the old mostly-autonomous behavior)
+  permissionMode?: PermissionMode; // defaults to "auto" (unattended, but destructive actions blocked)
   adversarialReview?: boolean; // defaults to false (adversarial plan review; needs an OpenRouter key)
   // ── Teams: create this session as a team lead (see docs/plans/anvil-team-support.md). A lead is an
   //    ordinary session that also gets the lead orchestration MCP tools + an integration/concurrency
@@ -1678,7 +1692,7 @@ export interface AutopilotStartCmd extends Envelope, Correlated {
   type: "autopilot.start"; // create a worktree session seeded with the plan and start it → autopilot.started
   workUnitId: string;
   model?: Model; // defaults to "opus"
-  permissionMode?: PermissionMode; // defaults to "bypassPermissions" (auto-start working without permission stalls)
+  permissionMode?: PermissionMode; // defaults to "auto" (auto-start working, no permission stalls, floor intact)
 }
 export interface AutopilotPipelineStartCmd extends Envelope, Correlated {
   type: "autopilot.pipeline.start"; // run the autonomous dev pipeline (§4) for a unit → autopilot.pipeline.result

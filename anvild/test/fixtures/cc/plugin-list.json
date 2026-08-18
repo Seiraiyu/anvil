@@ -1,0 +1,151 @@
+[
+  {
+    "id": "episodic-memory@superpowers-marketplace",
+    "version": "1.0.15",
+    "scope": "user",
+    "enabled": true,
+    "installPath": "/home/testuser/.claude/plugins/cache/superpowers-marketplace/episodic-memory/1.0.15",
+    "installedAt": "2025-12-20T03:24:53.458Z",
+    "lastUpdated": "2025-12-20T03:24:53.458Z",
+    "mcpServers": {
+      "episodic-memory": {
+        "command": "node",
+        "args": [
+          "${CLAUDE_PLUGIN_ROOT}/cli/mcp-server-wrapper.js"
+        ],
+        "env": {}
+      }
+    }
+  },
+  {
+    "id": "feature-dev@claude-plugins-official",
+    "version": "unknown",
+    "scope": "user",
+    "enabled": true,
+    "installPath": "/home/testuser/.claude/plugins/cache/claude-plugins-official/feature-dev/unknown",
+    "installedAt": "2026-02-08T17:08:33.359Z",
+    "lastUpdated": "2026-08-15T09:07:34.288Z"
+  },
+  {
+    "id": "frontend-design@claude-plugins-official",
+    "version": "unknown",
+    "scope": "user",
+    "enabled": false,
+    "installPath": "/home/testuser/.claude/plugins/cache/claude-plugins-official/frontend-design/unknown",
+    "installedAt": "2026-02-08T17:08:33.311Z",
+    "lastUpdated": "2026-08-15T09:07:34.294Z"
+  },
+  {
+    "id": "mattpocock-skills@claude-plugins-official",
+    "version": "1.2.3",
+    "scope": "project",
+    "enabled": false,
+    "installPath": "/home/testuser/.claude/plugins/cache/claude-plugins-official/mattpocock-skills/1.2.3",
+    "installedAt": "2026-08-10T10:18:08.194Z",
+    "lastUpdated": "2026-08-10T10:18:08.194Z",
+    "projectPath": "/home/testuser/simple-plm"
+  },
+  {
+    "id": "playground@claude-plugins-official",
+    "version": "unknown",
+    "scope": "user",
+    "enabled": false,
+    "installPath": "/home/testuser/.claude/plugins/cache/claude-plugins-official/playground/unknown",
+    "installedAt": "2026-02-21T20:25:03.479Z",
+    "lastUpdated": "2026-08-15T09:07:34.296Z"
+  },
+  {
+    "id": "rust-analyzer-lsp@claude-plugins-official",
+    "version": "1.0.0",
+    "scope": "user",
+    "enabled": true,
+    "installPath": "/home/testuser/.claude/plugins/cache/claude-plugins-official/rust-analyzer-lsp/1.0.0",
+    "installedAt": "2026-07-31T14:42:34.253Z",
+    "lastUpdated": "2026-07-31T14:42:34.253Z"
+  },
+  {
+    "id": "seiraiyu-skills@seiraiyu-marketplace",
+    "version": "1.9.0",
+    "scope": "user",
+    "enabled": true,
+    "installPath": "/home/testuser/.claude/plugins/cache/seiraiyu-marketplace/seiraiyu-skills/1.9.0",
+    "installedAt": "2026-02-26T05:41:50.214Z",
+    "lastUpdated": "2026-08-08T08:46:04.802Z"
+  },
+  {
+    "id": "skill-creator@claude-plugins-official",
+    "version": "unknown",
+    "scope": "user",
+    "enabled": false,
+    "installPath": "/home/testuser/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown",
+    "installedAt": "2026-04-25T09:50:05.365Z",
+    "lastUpdated": "2026-08-15T09:07:34.302Z"
+  },
+  {
+    "id": "stripe@claude-plugins-official",
+    "version": "0.5.1",
+    "scope": "project",
+    "enabled": false,
+    "installPath": "/home/testuser/.claude/plugins/cache/claude-plugins-official/stripe/0.5.1",
+    "installedAt": "2026-06-02T20:50:00.587Z",
+    "lastUpdated": "2026-08-11T15:37:34.637Z",
+    "projectPath": "/home/testuser/subaya-platform",
+    "mcpServers": {
+      "stripe": {
+        "type": "http",
+        "url": "https://mcp.stripe.com"
+      }
+    }
+  },
+  {
+    "id": "stripe@claude-plugins-official",
+    "version": "0.6.0",
+    "scope": "user",
+    "enabled": false,
+    "installPath": "/home/testuser/.claude/plugins/cache/claude-plugins-official/stripe/0.6.0",
+    "installedAt": "2026-06-02T22:28:43.537Z",
+    "lastUpdated": "2026-08-15T09:04:47.360Z",
+    "mcpServers": {
+      "stripe": {
+        "type": "http",
+        "url": "https://mcp.stripe.com"
+      }
+    }
+  },
+  {
+    "id": "superwisdom-db@seiraiyu-marketplace",
+    "version": "0.1.0",
+    "scope": "user",
+    "enabled": false,
+    "installPath": "/home/testuser/.claude/plugins/cache/seiraiyu-marketplace/superwisdom-db/0.1.0",
+    "installedAt": "2026-04-24T02:03:54.108Z",
+    "lastUpdated": "2026-04-24T02:03:54.108Z"
+  },
+  {
+    "id": "superwisdom@seiraiyu-marketplace",
+    "version": "1.3.1",
+    "scope": "user",
+    "enabled": true,
+    "installPath": "/home/testuser/.claude/plugins/cache/seiraiyu-marketplace/superwisdom/1.3.1",
+    "installedAt": "2026-03-04T02:57:03.383Z",
+    "lastUpdated": "2026-08-08T09:27:57.265Z"
+  },
+  {
+    "id": "typescript-lsp@claude-plugins-official",
+    "version": "1.0.0",
+    "scope": "user",
+    "enabled": false,
+    "installPath": "/home/testuser/.claude/plugins/cache/claude-plugins-official/typescript-lsp/1.0.0",
+    "installedAt": "2026-01-04T02:40:07.256Z",
+    "lastUpdated": "2026-01-04T02:40:07.256Z"
+  },
+  {
+    "id": "vtsls@claude-code-lsps",
+    "version": "1.0.0",
+    "scope": "user",
+    "enabled": true,
+    "installPath": "/home/testuser/.claude/plugins/cache/claude-code-lsps/vtsls/1.0.0",
+    "installedAt": "2026-01-04T03:12:44.892Z",
+    "lastUpdated": "2026-01-04T03:12:44.892Z"
+  }
+]

@@ -81,6 +81,11 @@ export interface TurnRunnerDeps {
   env: Record<string, string>;
   onResult: ResultRecorder;
   onCommands?: (commands: CommandInfo[]) => void;
+  /** `init.memory_paths.auto` — where CC resolved auto-memory for this session's repo. Reported on
+   *  every init and READ, never derived: CC keys memory by git repository and only it knows the
+   *  mapping (cc-config principle 1). The cc-config memory browser has nothing to open until this
+   *  has fired at least once. */
+  onMemoryDir?: (dir: string) => void;
   onTurnError?: (err: unknown) => void;
   /** Command vector for the CC binary. Default: [$ANVIL_CLI_PATH] (the plan-2 managed-install
    *  bridge) or ["claude"] from PATH. Tests point this at the fake harness (["bun", fake-cc.ts]). */
@@ -184,9 +189,13 @@ export class TurnRunner implements SessionDriver {
         "--include-partial-messages",
         "--verbose",
         "--model", sdkModelId(s.data.model),
-        // The session's own mode, 1:1 with the CLI engine (protocol delta 1); re-read every spawn
-        // so a mid-conversation session.set_permission_mode lands on the next turn.
-        "--permission-mode", s.data.permissionMode ?? this.deps.permissionMode ?? "default",
+        // The session's own mode, 1:1 with the CLI engine (protocol delta 1); re-read every spawn so a
+        // mid-conversation session.set_permission_mode lands on the next turn. Fallback is `auto`:
+        // `claude -p` does NOT inherit CC's built-in auto default (docs are explicit that -p starts in
+        // `default`), so an unset mode must be named explicitly or the session loses the classifier.
+        // In practice only pre-D-6 session records reach this branch — the supervisor stamps a
+        // concrete mode at create time — but they must land on the floor too, not below it.
+        "--permission-mode", s.data.permissionMode ?? this.deps.permissionMode ?? "auto",
         // Fully CC-native config (design §4.3, cc plan 5): user/project settings, CLAUDE.md,
         // skills, plugins, hooks, and the user's own MCP servers load exactly like terminal CC.
         // NOTE: with host hooks configured, `init` is NOT necessarily the first stream line
@@ -281,9 +290,12 @@ export class TurnRunner implements SessionDriver {
     if (sid) s.data.claudeSessionId = sid;
 
     // init reports the resolved slash-commands — publish for the composer's `/` autocomplete.
-    if (this.deps.onCommands && m.type === "system" && (m as any).subtype === "init") {
+    if (m.type === "system" && (m as any).subtype === "init") {
       const slash = (m as any).slash_commands;
-      if (Array.isArray(slash)) this.deps.onCommands(buildCommandInfo(slash, s.data.cwd));
+      if (this.deps.onCommands && Array.isArray(slash)) this.deps.onCommands(buildCommandInfo(slash, s.data.cwd));
+      // …and the resolved auto-memory directory, which the cc-config memory browser reads.
+      const mem = (m as any).memory_paths?.auto;
+      if (this.deps.onMemoryDir && typeof mem === "string" && mem) this.deps.onMemoryDir(mem);
     }
 
     // Context compaction boundary → persisted divider (ported from the SDK driver).

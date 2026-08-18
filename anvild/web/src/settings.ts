@@ -25,6 +25,7 @@
 // token-propagation check) live on `ui` in state.ts; the in-place container `todoistProjects` stays
 // `const` here.
 import { apiFetch } from "./api";
+import { renderCcConfig } from "./ccconfig";
 import { $, busy, byEnvName, envIcon, esc, icon, repaintPreservingInput } from "./dom";
 // dialogs.ts is a leaf, so the modal/toast helpers and the environment modals are direct imports —
 // they used to arrive via initSettings(deps).
@@ -115,7 +116,7 @@ export function initSettings(deps: SettingsDeps): void {
 }
 
 // ── Settings & servers (first-class management area) ──────────────────────────────
-type SettingsTab = "servers" | "environments" | "integrations" | "models" | "appearance" | "prompts";
+type SettingsTab = "servers" | "environments" | "integrations" | "models" | "appearance" | "prompts" | "cc-config";
 let settingsTab: SettingsTab = "environments";
 export function openSettings(): void {
   const root = $("#settings-root");
@@ -130,6 +131,7 @@ export function openSettings(): void {
       <button class="stab" role="tab" data-tab="integrations">${icon("extension")} Integrations</button>
       <button class="stab" role="tab" data-tab="models">${icon("smart_toy")} Models</button>
       <button class="stab" role="tab" data-tab="prompts">${icon("bookmark")} Prompts</button>
+      <button class="stab" role="tab" data-tab="cc-config">${icon("extension")} Claude Code</button>
       <button class="stab" role="tab" data-tab="appearance">${icon("palette")} Appearance</button>
     </div>
     <div class="settings-body">
@@ -158,6 +160,11 @@ export function openSettings(): void {
         <div class="section-head"><h3>Prompts</h3><button id="set-add-prompt" class="primary">${icon("add")} Add prompt</button></div>
         <p class="small muted">Reusable prompt snippets. Each shows up in the Prompts menu in the header — click it to drop the prompt into the chat box.</p>
         <div id="prompt-cards"></div>
+      </section>
+      <section class="settings-panel" data-tab="cc-config">
+        <div class="section-head"><h3>Claude Code</h3><button id="ccconfig-refresh" class="mini">${icon("refresh")} Refresh</button></div>
+        <p class="small muted">Plugins, MCP servers and memory are configured <b>per machine</b>. Changes apply to each session's <b>next turn</b> — nothing restarts.</p>
+        <div id="ccconfig-cards"><p class="small muted">Loading…</p></div>
       </section>
       <section class="settings-panel" data-tab="appearance">
         <div class="section-head"><h3>Appearance</h3></div>
@@ -190,6 +197,8 @@ export function openSettings(): void {
   openOverlay("settings", closeSettings); // Back closes Settings (no-op if it's already a layer)
   renderServerCards();
   renderEnvCards();
+  const ccRefresh = document.getElementById("ccconfig-refresh") as HTMLButtonElement | null;
+  ccRefresh?.addEventListener("click", () => void busy(ccRefresh, "…", async () => renderCcConfig()));
 }
 function selectSettingsTab(tab: SettingsTab): void {
   settingsTab = tab;
@@ -206,6 +215,10 @@ function selectSettingsTab(tab: SettingsTab): void {
     hub().sock.send({ type: "autopilot.schedule.get" }); // refresh the schedule card (once per tab open)
   }
   if (tab === "prompts") renderPromptsPanel();
+  // Lazily painted on first open: each card costs 3 REST round-trips per server, and every one of
+  // them shells out to `claude` on that box. Painting on settings-open instead would spawn a
+  // handful of CLI processes across the fleet every time anyone glanced at Settings.
+  if (tab === "cc-config") renderCcConfig();
   if (tab === "models") {
     renderModelsPanel();
     if (serverSupports(hub(), "auth")) {

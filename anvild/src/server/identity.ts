@@ -99,6 +99,10 @@ export const SERVER_CAPABILITIES: readonly string[] = [
   // Managed Claude Code installs (/api/cc/v1/*): versioned store + smoke-gated update + rollback
   // (cc-cli-transport design §4.8). Clients gate the CC version card on this.
   "cc-update",
+  // One Anvil surface for the per-machine ~/.claude config: plugins, MCP servers, auto-mode config,
+  // and memory (cc-config design). Clients gate the whole Settings → Claude Code area on this, so an
+  // older daemon renders nothing rather than dead controls.
+  "cc-config",
   // First-class Loop entity + engine + gate verbs (loops-circuit spec). A client gates every loop.*
   // send on this so an older daemon (projection-only) degrades to the Phase 0 loops.snapshot panel.
   "loops",

@@ -183,6 +183,10 @@ export class Supervisor {
   private readonly sessions = new Map<string, Session>();
   private readonly drivers = new Map<string, SessionDriver>();
   private readonly logs = new Map<string, EventLog>();
+  /** The auto-memory directory CC reported on the most recent `init` (`memory_paths.auto`).
+   *  Undefined until a turn has run: CC keys memory by git repository and only it knows that
+   *  mapping, so cc-config READS this rather than deriving a path (design principle 1). */
+  private ccMemoryDir: string | undefined;
   /** Resilience telemetry (v4, §5.7): the daemon's own counters + the latest report from each client. */
   private readonly serverCounters: Record<string, number> = { resumeDelta: 0, resumeSnapshot: 0, promptDeduped: 0 };
   // [BE2-23/SEC2-4] Bounded, TTL'd, and validated: keyed by an UNvalidated client-supplied id, this map
@@ -211,6 +215,15 @@ export class Supervisor {
    *  short-lived utility spawns (icon/branch-kind), which use the roster default. */
   private agentEnv(s?: Session, opts: { requireToken?: boolean } = {}): Record<string, string> {
     return buildAgentEnv({ accounts: this.accounts, ...(s?.data.accountId ? { accountId: s.data.accountId } : {}), ...opts });
+  }
+  /** The CC spawn env, for adapters that shell out on the daemon's behalf (cc-config). Same
+   *  allow-list every turn uses, so an adapter call inherits the roster's account selection. */
+  ccEnv(): Record<string, string> {
+    return this.agentEnv();
+  }
+  /** Where CC resolved auto-memory on the most recent turn, or undefined if none has run yet. */
+  memoryDir(): string | undefined {
+    return this.ccMemoryDir;
   }
   /** Same allow-list, but tolerant of a missing Claude token — for the session TERMINAL, which must keep
    *  working on a degraded machine (HJ-25/§8.3). Only agent turns are gated on the credential. */
@@ -1019,7 +1032,10 @@ export class Supervisor {
       worktree,
       git: await gitStatusAsync(cwd),
       model: cmd.model ?? "opus",
-      permissionMode: cmd.permissionMode ?? "bypassPermissions",
+      // `auto` is the new-session default (cc-config design D-6): CC's classifier runs the session
+      // unattended but blocks irreversible/destructive/exfiltrating actions. Replaces the old
+      // `bypassPermissions` default, which had no floor at all. A client that names a mode still wins.
+      permissionMode: cmd.permissionMode ?? "auto",
       adversarialReview: cmd.adversarialReview ?? false,
       status: "idle",
       createdAt: now(),
@@ -1558,6 +1574,7 @@ export class Supervisor {
         env: this.agentEnv(s),
         onResult: (usage) => this.onAgentResult(id, usage),
         onCommands: (commands) => this.onSessionCommands(id, commands),
+        onMemoryDir: (dir) => void (this.ccMemoryDir = dir),
         onTurnError: (err) => this.onTurnError(err),
         // Disk is truth (cc plan 6 §4.9): a turn that ended without a result may have
         // landed more in the transcript than the stream delivered — heal immediately.
@@ -1982,7 +1999,7 @@ export class Supervisor {
       cwd: process.env.HOME ?? this.store.worktreeRoot(),
       source: "existing-dir",
       model: "opus",
-      permissionMode: "bypassPermissions",
+      permissionMode: "auto", // the new-session default (D-6); this one runs in $HOME, so the floor matters most
       status: "idle",
       createdAt: now(),
       lastActivityAt: now(),
